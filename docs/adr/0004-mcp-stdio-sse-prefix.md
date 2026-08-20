@@ -25,6 +25,5 @@ servers can collide with each other and with built-ins (`read_file` etc.).
 - Users can attach any stdio or SSE MCP server without code changes.
 - Namespacing keeps the merged tool list unambiguous.
 - SSE reliability (reconnect) is out of scope for v1.
-- SSE endpoints are supported over plain `http://`; `https://` SSE requires a
-  TLS provider in rmcp's bundled reqwest (`aws-lc-rs` did not resolve in this
-  environment), so it is deferred.
+- SSE endpoints work over both `http://` and `https://`; TLS uses the rustls
+  provider `aws-lc-rs` (bundled, built via cmake — no system OpenSSL needed).

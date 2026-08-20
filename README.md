@@ -99,9 +99,8 @@ MCP tools are exposed to the model as `mcp:<server>:<tool>` (e.g.
 `mcp:fs.read_file`).
 
 > **stdio** works with any local command (e.g. `npx`, `uvx`, a compiled binary).
-> SSE servers are currently supported over **plain `http://`** URLs; a
-> `https://` SSE endpoint needs a TLS provider in `rmcp`'s bundled reqwest and
-> is not wired in v1.
+> SSE servers are supported over **both `http://` and `https://`** URLs (TLS via
+> `aws-lc-rs`/rustls).
 
 ### Logging
 

@@ -99,6 +99,9 @@ pub struct Config {
     pub deny_tools: Vec<String>,
     /// Whether the LLM safety gate guards `bash` execution. `MA_GATE=0` disables.
     pub gate_enabled: bool,
+    /// Byte threshold for tool results: results at or below this size pass
+    /// through to the model unchanged; larger ones are compressed by a separate
+    /// LLM call (`MA_MAX_TOOL_RESULT_BYTES`).
     pub max_tool_result_bytes: usize,
 
     // MCP

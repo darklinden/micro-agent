@@ -63,8 +63,38 @@ pub fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        let mut t = s[..max].to_string();
+        // `max` may land mid-character for multi-byte UTF-8; floor to the
+        // nearest char boundary before slicing to avoid a panic.
+        let bound = s.floor_char_boundary(max);
+        let mut t = s[..bound].to_string();
         t.push_str("\n…[truncated]");
         t
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate;
+
+    #[test]
+    fn truncate_multibyte_does_not_panic() {
+        // `é` is 2 bytes; byte 1 is exactly its start boundary, so we keep "h".
+        assert_eq!(truncate("héllo", 1), "h\n…[truncated]");
+        // Full-width '（' is 3 bytes; max that lands inside it must not panic.
+        let s = "a".repeat(6) + "（b";
+        let out = truncate(&s, 7);
+        assert!(!out.is_empty());
+        assert!(out.starts_with("aaaaaa"));
+        assert!(out.contains("[truncated]"));
+    }
+
+    #[test]
+    fn truncate_zero_limit() {
+        assert_eq!(truncate("hello", 0), "\n…[truncated]");
+    }
+
+    #[test]
+    fn truncate_passthrough_within_limit() {
+        assert_eq!(truncate("hello", 5), "hello");
     }
 }

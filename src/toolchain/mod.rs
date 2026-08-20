@@ -5,6 +5,7 @@
 //! matching MCP server, applying the deny-list and the bash gate when needed.
 
 pub mod builtin;
+pub mod compress;
 pub mod gate;
 
 use crate::config::Config;

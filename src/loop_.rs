@@ -8,6 +8,7 @@
 use crate::config::Config;
 use crate::mcp::McpPool;
 use crate::out;
+use crate::toolchain::compress;
 use crate::toolchain::gate::Gate;
 use crate::toolchain::{build_tools, run_tool, ToolCtx};
 use crate::types::{ContentBlock, Message, Role, StreamEvent, ToolDef};
@@ -104,7 +105,13 @@ impl<'a> Agent<'a> {
                     is_error = r.is_error,
                     "tool result"
                 );
-                let content = crate::upstream::truncate(&r.content, self.cfg.max_tool_result_bytes);
+                let content = compress::prepare_tool_result(
+                    self.upstream,
+                    &self.objective,
+                    self.cfg.max_tool_result_bytes,
+                    &r.content,
+                )
+                .await;
                 result_blocks.push(ContentBlock::ToolResult {
                     tool_use_id: c.id.clone(),
                     content,

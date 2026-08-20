@@ -14,14 +14,14 @@ could be misjudged as a chat endpoint, and self-hosted proxies blur the line.
 
 ## Decision
 
-Adopt the `ai-bridge` convention: `UPSTREAM_TYPE` is **required** and declares
-the format explicitly — `anthropic-messages` or `oai-chat`. Configuration uses
-the unified names `UPSTREAM_URL` / `UPSTREAM_API_KEY` / `UPSTREAM_MODEL`.
-No URL heuristics.
+Adopt the `ai-bridge` convention under the `MA_` namespace: `MA_UPSTREAM_TYPE`
+is **required** and declares the format explicitly — `anthropic-messages` or
+`oai-chat`. Configuration uses the unified names `MA_UPSTREAM_URL` /
+`MA_UPSTREAM_API_KEY` / `MA_UPSTREAM_MODEL`. No URL heuristics.
 
 ## Consequences
 
-- Missing `UPSTREAM_TYPE` is a configuration error (exit 2).
-- Adding a third provider family only means a new `UPSTREAM_TYPE` value,
+- Missing `MA_UPSTREAM_TYPE` is a configuration error (exit 2).
+- Adding a third provider family only means a new `MA_UPSTREAM_TYPE` value,
   not new detection logic.
 - Providers whose clients speak one of the two formats are usable unchanged.

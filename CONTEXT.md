@@ -1,12 +1,12 @@
 # ma — Domain Context
 
-`ma` 是一个微型 CLI agent（无 TUI），复用 `ai-bridge` 的 `UPSTREAM_*` 上游约定与 `MA_*` agent 行为约定。以下是领域术语表（不含实现细节）。
+`ma` 是一个微型 CLI agent（无 TUI），复用 `ai-bridge` 的上游约定（统一纳入 `MA_*` 命名空间）作为 `MA_*` agent 行为约定。以下是领域术语表（不含实现细节）。
 
 ## Upstream
 
-代理实际请求的 AI 模型 API，由 `UPSTREAM_TYPE` 显式声明。目前支持 `anthropic-messages`（Anthropic Messages 协议）与 `oai-chat`（OpenAI Chat Completions / 兼容端点）二者之一。_Avoid_: 上游, backend, provider, upstream type detection 的 URL 启发式。
+代理实际请求的 AI 模型 API，由 `MA_UPSTREAM_TYPE` 显式声明。目前支持 `anthropic-messages`（Anthropic Messages 协议）与 `oai-chat`（OpenAI Chat Completions / 兼容端点）二者之一。_Avoid_: 上游, backend, provider, upstream type detection 的 URL 启发式。
 
-统一命名：`UPSTREAM_TYPE` / `UPSTREAM_URL` / `UPSTREAM_API_KEY` / `UPSTREAM_MODEL`。上游格式是显式声明的，绝不通过 URL 猜（避免把 `anthropic.com/v1/messages` 误判为 chat）。
+统一命名：`MA_UPSTREAM_TYPE` / `MA_UPSTREAM_URL` / `MA_UPSTREAM_API_KEY` / `MA_UPSTREAM_MODEL`。上游格式是显式声明的，绝不通过 URL 猜（避免把 `anthropic.com/v1/messages` 误判为 chat）。
 
 ## Agent
 
@@ -34,7 +34,7 @@ Model Context Protocol 客户端，支持 **stdio**（子进程）与 **SSE**（
 
 ## 决策（Decision）索引
 
-- 上游格式显式声明（`UPSTREAM_TYPE` 必填，不猜 URL）
+- 上游格式显式声明（`MA_UPSTREAM_TYPE` 必填，不猜 URL）
 - Agent 纯 auto、无人工确认 / 无信任 / 无权限弹窗
 - 内置工具仅命令类过安全闸门
 - MCP 工具统一 `mcp:` 前缀

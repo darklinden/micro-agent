@@ -12,15 +12,15 @@ trust prompts — the working directory is trusted and tools run autonomously
 
 ```bash
 # oai-chat (DeepSeek / Ollama / vLLM / any OpenAI-compatible endpoint)
-export UPSTREAM_TYPE=oai-chat
-export UPSTREAM_URL=https://api.example.com/v1
-export UPSTREAM_API_KEY=sk-...
-export UPSTREAM_MODEL=deepseek-v4-flash
+export MA_UPSTREAM_TYPE=oai-chat
+export MA_UPSTREAM_URL=https://api.example.com/v1
+export MA_UPSTREAM_API_KEY=sk-...
+export MA_UPSTREAM_MODEL=deepseek-v4-flash
 
 # or anthropic-messages
-# export UPSTREAM_TYPE=anthropic-messages
-# export UPSTREAM_URL=https://api.anthropic.com/v1
-# export UPSTREAM_API_KEY=sk-ant-...
+# export MA_UPSTREAM_TYPE=anthropic-messages
+# export MA_UPSTREAM_URL=https://api.anthropic.com/v1
+# export MA_UPSTREAM_API_KEY=sk-ant-...
 
 ma -p "read the README and summarize it in three bullets"
 ```
@@ -71,21 +71,21 @@ folder?" step. Safety comes from `MA_DENY_TOOLS` and the bash safety gate.
 
 ## Env variables
 
-### Upstream (required) — unified `UPSTREAM_*` names
+### Upstream (required) — unified `MA_UPSTREAM_*` names
 
-| variable          | required | default* | meaning                                   |
-|-------------------|----------|----------|-------------------------------------------|
-| `UPSTREAM_TYPE`   | yes      | —        | `anthropic-messages` \| `oai-chat`        |
-| `UPSTREAM_URL`    | yes      | —        | base URL of the API                       |
-| `UPSTREAM_API_KEY`| yes      | —        | API key                                   |
-| `UPSTREAM_MODEL`  | no       | type*    | model id                                  |
+| variable             | required | default* | meaning                                   |
+|----------------------|----------|----------|-------------------------------------------|
+| `MA_UPSTREAM_TYPE`   | yes      | —        | `anthropic-messages` \| `oai-chat`        |
+| `MA_UPSTREAM_URL`    | yes      | —        | base URL of the API                       |
+| `MA_UPSTREAM_API_KEY`| yes      | —        | API key                                   |
+| `MA_UPSTREAM_MODEL`  | no       | type*    | model id                                  |
 | `MA_MAX_TOKENS`   | no       | `4096`   | max output tokens per assistant turn      |
 | `MA_HEADERS`      | no       | —        | JSON object of extra request headers      |
 
 \* defaults: `oai-chat` → `deepseek-v4-flash`; `anthropic-messages` →
 `claude-sonnet-4-5`.
 
-The format is chosen by `UPSTREAM_TYPE` (never guessed from the URL), matching
+The format is chosen by `MA_UPSTREAM_TYPE` (never guessed from the URL), matching
 the `ai-bridge` convention.
 
 ### Agent behaviour
@@ -96,6 +96,30 @@ the `ai-bridge` convention.
 | `MA_DENY_TOOLS`          | —         | comma-separated tool names that must never run (e.g. `bash`)     |
 | `MA_GATE`                | `1`       | `0` disables the bash safety gate (pure auto)                    |
 | `MA_MAX_TOOL_RESULT_BYTES` | `32768` | cap on tool output fed back into context                         |
+| `MA_THINKING_EFFORT`       | `high`  | reasoning intensity: `none` \| `low` \| `high` \| `max` (see below) |
+
+### Reasoning (thinking / effort)
+
+`MA_THINKING_EFFORT` tunes reasoning intensity with a single value, mapped per
+provider (mirrors the `ai-bridge` convention):
+
+| value   | `oai-chat` upstream          | `anthropic-messages` upstream                    |
+|---------|-------------------------------|--------------------------------------------------|
+| `none`  | no field sent (default)       | no `thinking` block                              |
+| `low`   | `reasoning_effort: "low"`     | `thinking{type:enabled, budget≈1024}`            |
+| `high`  | `reasoning_effort: "high"`    | `thinking{type:enabled, budget≈4096}`            |
+| `max`   | `reasoning_effort: "max"`     | `thinking{type:enabled, budget≈16384}`           |
+
+For `oai-chat` the value is emitted as the top-level `reasoning_effort` (DeepSeek
+and OpenAI o-series understand it). For `anthropic-messages` it becomes an
+Anthropic `thinking` block whose `budget_tokens` is auto-clamped below
+`MA_MAX_TOKENS` (Anthropic requires `1024 ≤ budget < max_tokens`). Default is
+`high`; set `none` to send nothing.
+
+When the upstream emits reasoning (DeepSeek `reasoning_content`, Anthropic
+`thinking_delta`), it is streamed to stdout labelled as thinking and replayed in
+the assistant turn — including the Anthropic `signature` handoff token — so
+multi-turn tool loops stay lossless (matching `ai-bridge`'s reasoning bridge).
 
 ### Safety gate
 

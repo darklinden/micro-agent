@@ -10,7 +10,7 @@ pub mod oai_chat;
 pub mod sse;
 
 use crate::config::{Config, UpstreamType};
-use crate::types::{Message, StreamOutcome, ToolDef};
+use crate::types::{Message, StreamEvent, StreamOutcome, ToolDef};
 use anyhow::Result;
 use serde_json::Value;
 
@@ -21,14 +21,16 @@ pub trait Upstream: Send + Sync {
     fn wire_tools(&self, tools: &[ToolDef]) -> Vec<Value>;
 
     /// Run one streaming chat turn. Text deltas are pushed onto `emitter` as
-    /// they arrive (the caller drains them to stdout). Returns the tool calls
-    /// (if any) and the full assistant text for logging.
+    /// they arrive, tagged by kind ([`StreamEvent::Think`] for reasoning,
+    /// [`StreamEvent::Answer`] for the visible reply); the caller drains them
+    /// to stdout. Returns the tool calls (if any) and the full assistant text
+    /// for logging.
     async fn chat(
         &self,
         system: &str,
         messages: &[Message],
         tools: &[ToolDef],
-        emitter: tokio::sync::mpsc::UnboundedSender<String>,
+        emitter: tokio::sync::mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<StreamOutcome>;
 }
 

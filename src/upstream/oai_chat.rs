@@ -1,10 +1,12 @@
-//! OpenAI Chat Completions upstream client (`UPSTREAM_TYPE=oai-chat`).
+//! OpenAI Chat Completions upstream client (`MA_UPSTREAM_TYPE=oai-chat`).
 //!
 //! Also covers DeepSeek / Ollama / vLLM and other OpenAI-compatible endpoints.
 
 use super::{Result, Upstream};
 use crate::config::Config;
-use crate::types::{ContentBlock, Message, Role, StreamOutcome, ToolCall, ToolDef};
+use crate::types::{
+    ContentBlock, Message, Role, StreamEvent, StreamOutcome, ToolCall, ToolDef,
+};
 use anyhow::{bail, Context};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -14,6 +16,8 @@ pub struct OaiChatClient {
     api_key: String,
     model: String,
     max_tokens: usize,
+    /// OpenAI `reasoning_effort` from `MA_THINKING_EFFORT`; `None` omits it.
+    reasoning_effort: Option<&'static str>,
     client: reqwest::Client,
 }
 
@@ -30,8 +34,32 @@ impl OaiChatClient {
             api_key: cfg.api_key.clone(),
             model: cfg.model.clone(),
             max_tokens: cfg.max_tokens,
+            reasoning_effort: cfg.thinking_effort.as_audience_effort(),
             client,
         }
+    }
+
+    /// Build the Chat Completions request JSON (pure, testable).
+    fn build_body(&self, system: &str, messages: &[Message], tools: &[ToolDef]) -> Value {
+        let mut wire = Vec::new();
+        if !system.is_empty() {
+            wire.push(json!({"role": "system", "content": system}));
+        }
+        wire.extend(self.convert_messages(messages));
+
+        let mut body = json!({
+            "model": self.model,
+            "stream": true,
+            "max_tokens": self.max_tokens,
+            "messages": wire,
+        });
+        if let Some(effort) = self.reasoning_effort {
+            body["reasoning_effort"] = json!(effort);
+        }
+        if !tools.is_empty() {
+            body["tools"] = Value::Array(self.wire_tools(tools));
+        }
+        body
     }
 
     /// Expand neutral messages into flat OpenAI wire messages.
@@ -62,6 +90,9 @@ impl OaiChatClient {
                             ContentBlock::ToolUse { .. } => {
                                 // tool_use inside user messages is invalid for oai-chat; ignore.
                             }
+                            ContentBlock::Thinking { .. } => {
+                                // thinking never appears in user messages; ignore.
+                            }
                         }
                     }
                     if !text_parts.is_empty() {
@@ -70,11 +101,20 @@ impl OaiChatClient {
                 }
                 Role::Assistant => {
                     let mut text: Option<String> = None;
+                    let mut thinking: Option<String> = None;
                     let mut calls: Vec<Value> = Vec::new();
                     for b in &m.blocks {
                         match b {
                             ContentBlock::Text(t) => {
                                 text = Some(text.map(|x| x + t).unwrap_or_else(|| t.clone()));
+                            }
+                            ContentBlock::Thinking { thinking: t, .. } => {
+                                // Re-emit for DeepSeek-compatible models that
+                                // read `reasoning_content` on assistant turns
+                                // (mirrors ai-bridge `preserve_reasoning_content`).
+                                thinking = Some(
+                                    thinking.map(|x| x + t).unwrap_or_else(|| t.clone()),
+                                );
                             }
                             ContentBlock::ToolUse { id, name, input } => {
                                 calls.push(json!({
@@ -91,6 +131,9 @@ impl OaiChatClient {
                     }
                     let mut msg = json!({"role": "assistant"});
                     msg["content"] = text.map(Value::String).unwrap_or(Value::Null);
+                    if let Some(rc) = thinking {
+                        msg["reasoning_content"] = json!(rc);
+                    }
                     if !calls.is_empty() {
                         msg["tool_calls"] = Value::Array(calls);
                     }
@@ -106,23 +149,9 @@ impl OaiChatClient {
         system: &str,
         messages: &[Message],
         tools: &[ToolDef],
-        emitter: tokio::sync::mpsc::UnboundedSender<String>,
+        emitter: tokio::sync::mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<StreamOutcome> {
-        let mut wire = Vec::new();
-        if !system.is_empty() {
-            wire.push(json!({"role": "system", "content": system}));
-        }
-        wire.extend(self.convert_messages(messages));
-
-        let mut body = json!({
-            "model": self.model,
-            "stream": true,
-            "max_tokens": self.max_tokens,
-            "messages": wire,
-        });
-        if !tools.is_empty() {
-            body["tools"] = Value::Array(self.wire_tools(tools));
-        }
+        let body = self.build_body(system, messages, tools);
 
         tracing::debug!(url = %self.url, model = %self.model, "oai-chat request");
         tracing::debug!(body = %body, "oai-chat request body");
@@ -145,6 +174,7 @@ impl OaiChatClient {
 
         let mut acc: HashMap<usize, OaiAccum> = HashMap::new();
         let mut out = StreamOutcome::default();
+        let mut thinking_text = String::new();
 
         super::sse::for_each_event(resp, |ev| {
             if ev.data == "[DONE]" {
@@ -157,6 +187,14 @@ impl OaiChatClient {
                 return;
             };
             let delta = &choice["delta"];
+            // Reasoning / thinking content (e.g. DeepSeek `reasoning_content`).
+            // Accumulated so the assistant turn can re-emit it on replay.
+            if let Some(reasoning) = delta.get("reasoning_content").and_then(Value::as_str)
+                && !reasoning.is_empty()
+            {
+                let _ = emitter.send(StreamEvent::Think(reasoning.to_string()));
+                thinking_text.push_str(reasoning);
+            }
             if let Some(content) = delta.get("content") {
                 // May be a plain string or an array of parts.
                 let chunk = match content {
@@ -168,7 +206,7 @@ impl OaiChatClient {
                     _ => String::new(),
                 };
                 if !chunk.is_empty() {
-                    let _ = emitter.send(chunk.clone());
+                    let _ = emitter.send(StreamEvent::Answer(chunk.clone()));
                     out.assistant_text.push_str(&chunk);
                 }
             }
@@ -216,6 +254,13 @@ impl OaiChatClient {
             });
         }
 
+        if !thinking_text.is_empty() {
+            out.assistant_thinking = Some(crate::types::ThinkingBlock {
+                thinking: thinking_text,
+                signature: None,
+            });
+        }
+
         Ok(out)
     }
 }
@@ -249,7 +294,7 @@ impl Upstream for OaiChatClient {
         system: &str,
         messages: &[Message],
         tools: &[ToolDef],
-        emitter: tokio::sync::mpsc::UnboundedSender<String>,
+        emitter: tokio::sync::mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<StreamOutcome> {
         self.request(system, messages, tools, emitter).await
     }
@@ -267,7 +312,15 @@ mod tests {
             api_key: "k".into(),
             model: "m".into(),
             max_tokens: 100,
+            reasoning_effort: None,
             client: reqwest::Client::new(),
+        }
+    }
+
+    fn client_with_effort(effort: &'static str) -> OaiChatClient {
+        OaiChatClient {
+            reasoning_effort: Some(effort),
+            ..client()
         }
     }
 
@@ -300,5 +353,34 @@ mod tests {
         assert_eq!(out[2]["role"], "tool");
         assert_eq!(out[2]["tool_call_id"], "call_1");
         assert_eq!(out[2]["content"], "greeting");
+    }
+
+    #[test]
+    fn build_body_omits_reasoning_effort_when_none() {
+        let body = client().build_body("sys", &[], &[]);
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn build_body_includes_reasoning_effort() {
+        let body = client_with_effort("high").build_body("sys", &[], &[]);
+        assert_eq!(body["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn convert_messages_emits_reasoning_content_from_thinking() {
+        let msgs = vec![Message {
+            role: Role::Assistant,
+            blocks: vec![
+                ContentBlock::Thinking {
+                    thinking: "step A ".into(),
+                    signature: None,
+                },
+                ContentBlock::Text("answer".into()),
+            ],
+        }];
+        let out = client().convert_messages(&msgs);
+        assert_eq!(out[0]["reasoning_content"], "step A ");
+        assert_eq!(out[0]["content"], "answer");
     }
 }

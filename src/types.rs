@@ -18,6 +18,14 @@ pub enum Role {
 pub enum ContentBlock {
     /// Plain assistant/user text.
     Text(String),
+    /// Assistant hidden reasoning (Anthropic `thinking` block, OAI
+    /// `reasoning_content`). Kept so tool-loop replays stay lossless: Anthropic
+    /// requires the thinking block — including its opaque `signature`, when the
+    /// upstream enforces handoff — to be sent back verbatim on subsequent turns.
+    Thinking {
+        thinking: String,
+        signature: Option<String>,
+    },
     /// Assistant request to invoke a tool. Also the shape we hand to upstream
     /// clients as the assistant `tool_use`.
     ToolUse {
@@ -31,6 +39,15 @@ pub enum ContentBlock {
         content: String,
         is_error: bool,
     },
+}
+
+/// Assistant hidden reasoning captured from an upstream stream.
+#[derive(Debug, Clone)]
+pub struct ThinkingBlock {
+    /// The reasoning text accumulated this turn.
+    pub thinking: String,
+    /// Anthropic handoff token; `None` for chat upstreams (e.g. `reasoning_content`).
+    pub signature: Option<String>,
 }
 
 /// One message in the conversation history sent to the upstream API.
@@ -66,10 +83,25 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 
+/// A single streamed token, tagged by its kind so stdout can label
+/// thinking (reasoning) separately from the final answer text.
+#[derive(Debug, Clone)]
+pub enum StreamEvent {
+    /// Reasoning / thinking fragment (anthropic `thinking_delta`, OAI
+    /// `reasoning_content`). Never fed back as assistant content.
+    Think(String),
+    /// Answer text fragment (the model's visible reply).
+    Answer(String),
+}
+
 /// Exposed by each upstream client: the tool calls (if any) and the full
 /// assistant text produced this turn.
 #[derive(Debug, Default)]
 pub struct StreamOutcome {
     pub tool_calls: Vec<ToolCall>,
     pub assistant_text: String,
+    /// Hidden reasoning produced this turn, when the upstream emits any.
+    /// Replayed in the assistant turn so multi-turn tool loops stay lossless
+    /// (Anthropic requires the `signature` back on continuation).
+    pub assistant_thinking: Option<ThinkingBlock>,
 }

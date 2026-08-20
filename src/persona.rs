@@ -79,6 +79,7 @@ mod tests {
             api_key: "k".into(),
             model: "m".into(),
             max_tokens: 100,
+            thinking_effort: crate::config::ThinkingEffort::None,
             extra_headers: vec![],
             max_turns: 5,
             deny_tools: vec![],

@@ -12,7 +12,7 @@ mod upstream;
 
 use anyhow::Result;
 use clap::Parser;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Lightweight autonomous CLI agent, driven entirely by environment variables.
 #[derive(Parser, Debug)]
@@ -32,32 +32,40 @@ fn usage_error(msg: &str) -> ! {
     std::process::exit(2);
 }
 
-/// Load `.env` the executable's directory can rely on: by default the `.env`
-/// next to the executable; additionally, in debug builds, the `.env` at the
-/// crate root (`CARGO_MANIFEST_DIR`). Existing shell env vars always win, and
-/// the executable-dir file takes precedence over the crate root.
-fn load_env() {
+/// Load `.env` files (exe-dir first, then crate root in debug builds; shell
+/// vars always win, exe-dir takes precedence). Returns the paths of the files
+/// that actually existed and were loaded.
+fn load_env() -> Vec<PathBuf> {
+    let mut loaded = Vec::new();
     // Load the executable-dir `.env` first so it takes precedence over the
     // crate root: `dotenvy::from_path` never overrides an already-set
     // variable, so whichever file loads first wins.
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
-        load_from(&dir.join(".env"));
+        let p = dir.join(".env");
+        if load_from(&p) {
+            loaded.push(p);
+        }
     }
     if cfg!(debug_assertions) {
-        load_from(&Path::new(env!("CARGO_MANIFEST_DIR")).join(".env"));
+        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join(".env");
+        if load_from(&p) {
+            loaded.push(p);
+        }
     }
+    loaded
 }
 
-/// Load a single `.env` file without overriding already-set variables. A
-/// missing or unreadable file is not fatal.
-fn load_from(path: &Path) {
-    let _ = dotenvy::from_path(path);
+/// Load a single `.env` file without overriding already-set variables.
+/// Returns whether the file existed and was loaded. Missing/unreadable is not
+/// fatal (returns `false`).
+fn load_from(path: &Path) -> bool {
+    dotenvy::from_path(path).is_ok()
 }
 
 fn main() {
-    load_env();
+    let loaded_env = load_env();
     let cli = Cli::parse();
 
     if !cli.list_tools && cli.prompt.is_none() {
@@ -70,6 +78,20 @@ fn main() {
         Err(e) => usage_error(&format!("invalid configuration: {e:#}")),
     };
     let _guard = logger::init(cfg.log_dir.as_ref(), &cfg.log_level);
+
+    // Startup banner: which `.env` files were actually loaded and the
+    // upstream base URL in effect (never the API key).
+    let env_desc = if loaded_env.is_empty() {
+        "(none)".to_string()
+    } else {
+        loaded_env
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    out::banner(&format!("env: {env_desc} | upstream url: {}", cfg.url));
+    tracing::info!(env = %env_desc, url = %cfg.url, "startup");
 
     let rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,

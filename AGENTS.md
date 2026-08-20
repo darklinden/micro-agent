@@ -29,8 +29,8 @@ cargo clippy --all-targets -- -D warnings    # lint
 
 ```bash
 python3 manual-test/mock_upstream.py 18080   # terminal 1
-export UPSTREAM_TYPE=oai-chat UPSTREAM_URL=http://127.0.0.1:18080/v1 \
-       UPSTREAM_API_KEY=x
+export MA_UPSTREAM_TYPE=oai-chat MA_UPSTREAM_URL=http://127.0.0.1:18080/v1 \
+       MA_UPSTREAM_API_KEY=x
 cargo run -- -p "do a thing"                 # terminal 2
 ```
 
@@ -42,7 +42,7 @@ The design centers on a **neutral core that every upstream client adapts to a wi
 
 - `types.rs` — the crate-wide neutral types: `Message`, `ContentBlock` (`Text` / `ToolUse` / `ToolResult`), `ToolDef`, `ToolCall`, `StreamOutcome`. The turn loop and toolchain only ever talk in these types; no provider JSON leaks past `upstream/`.
 
-- `config.rs` — all config from env. Two namespaces mirror the `ai-bridge` convention: required `UPSTREAM_*` (type/url/api_key/model) and `MA_*` (agent behaviour, MCP, system prompt, logging). `UpstreamType` is explicit (`anthropic-messages` | `oai-chat`) — never guessed from the URL (ADR-0001).
+- `config.rs` — all config from env. Everything lives under the `MA_` namespace (mirroring the `ai-bridge` upstream convention): required `MA_UPSTREAM_*` (type/url/api_key/model) plus `MA_*` (agent behaviour, MCP, system prompt, logging). `UpstreamType` is explicit (`anthropic-messages` | `oai-chat`) — never guessed from the URL (ADR-0001).
 
 - `upstream/mod.rs` — the `Upstream` trait: `wire_tools()` + streaming `chat(system, messages, tools, emitter)`. New providers implement this trait; `build()` picks the client by `UpstreamType`. `sse.rs` is a minimal SSE parser both providers share (streams via `reqwest::Response::chunk()`, no external stream adapter).
 

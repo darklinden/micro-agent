@@ -18,8 +18,11 @@ pub struct AnthropicClient {
 impl AnthropicClient {
     pub fn new(cfg: &Config, client: reqwest::Client) -> Self {
         let base = cfg.url.trim_end_matches('/');
-        let url = if cfg.url.ends_with("/messages") || cfg.url.ends_with("/v1/messages") {
+        // Accept any of: `.../v1/messages`, `.../v1`, or a bare host root.
+        let url = if cfg.url.ends_with("/messages") {
             cfg.url.clone()
+        } else if base.ends_with("/v1") {
+            format!("{base}/messages")
         } else {
             format!("{base}/v1/messages")
         };
@@ -266,5 +269,44 @@ mod tests {
         assert_eq!(out[2]["role"], "user");
         assert_eq!(out[2]["content"][0]["type"], "tool_result");
         assert_eq!(out[2]["content"][0]["tool_use_id"], "t1");
+    }
+
+    fn cfg(url: &str) -> crate::config::Config {
+        crate::config::Config {
+            upstream_type: crate::config::UpstreamType::AnthropicMessages,
+            url: url.into(),
+            api_key: "k".into(),
+            model: "m".into(),
+            max_tokens: 100,
+            extra_headers: vec![],
+            max_turns: 5,
+            deny_tools: vec![],
+            gate_enabled: true,
+            max_tool_result_bytes: 1000,
+            mcp_servers: vec![],
+            mcp_list_tools_timeout_ms: 1000,
+            system_prefix: None,
+            system_suffix: None,
+            persona: None,
+            log_dir: None,
+            log_level: "info".into(),
+        }
+    }
+
+    #[test]
+    fn joins_messages_url() {
+        let cases = [
+            ("https://api.anthropic.com", "https://api.anthropic.com/v1/messages"),
+            ("https://api.anthropic.com/", "https://api.anthropic.com/v1/messages"),
+            ("https://api.anthropic.com/v1", "https://api.anthropic.com/v1/messages"),
+            (
+                "https://api.anthropic.com/v1/messages",
+                "https://api.anthropic.com/v1/messages",
+            ),
+        ];
+        for (input, expected) in cases {
+            let got = AnthropicClient::new(&cfg(input), reqwest::Client::new()).url;
+            assert_eq!(got, expected, "for input {input}");
+        }
     }
 }

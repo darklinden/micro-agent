@@ -430,6 +430,7 @@ mod tests {
             thinking_effort: crate::config::ThinkingEffort::None,
             extra_headers: vec![],
             max_turns: 5,
+            task_max_turns: None,
             deny_tools: vec![],
             gate_enabled: true,
             max_tool_result_bytes: 1000,

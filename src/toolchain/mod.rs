@@ -7,12 +7,14 @@
 pub mod builtin;
 pub mod compress;
 pub mod gate;
+pub mod subagent;
 
 use crate::config::Config;
 use crate::mcp::McpPool;
 use crate::toolchain::builtin::BASH;
 use crate::toolchain::gate::Gate;
 use crate::types::ToolDef;
+use crate::upstream::Upstream;
 use serde_json::Value;
 
 /// The result of one tool invocation, fed back to the model as a tool result.
@@ -26,7 +28,15 @@ pub struct ToolOutput {
 pub struct ToolCtx<'a> {
     pub cfg: &'a Config,
     pub mcp: &'a McpPool,
+    /// Shared upstream client (needed by the `task` sub-agent dispatcher).
+    pub upstream: &'a dyn Upstream,
     pub gate: Gate<'a>,
+    /// Nesting depth of the running agent (0 = top level). `task` refuses
+    /// when depth > 0.
+    pub depth: u32,
+    /// This run's plan file path: `plan` records it on first write and
+    /// overwrites it on updates, so one run produces one plan.
+    pub plan_path: std::sync::Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
 }
 
 /// Merge built-in + MCP tool definitions into the list exposed to the model.
@@ -72,7 +82,7 @@ pub async fn run_tool(name: &str, args: &Value, ctx: &ToolCtx<'_>) -> ToolOutput
     }
 
     // 4. Built-in tools.
-    if let Some(out) = builtin::run(name, args, ctx.cfg).await {
+    if let Some(out) = builtin::run(name, args, ctx).await {
         return out;
     }
 

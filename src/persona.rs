@@ -21,6 +21,34 @@ Guidelines:
 - Keep commentary during tool use brief. Your final message is the deliverable — make it clear, accurate, and complete.
 - Never invent tool output that you did not actually observe."#;
 
+/// Instructions appended to the system prompt in planning mode: explore with
+/// read-only tools and submit a complete numbered plan via the `plan` tool.
+pub const MODE_PLAN_INSTRUCTIONS: &str = r#"You are in the PLANNING phase. Your deliverable is a plan, not an implementation.
+
+Guidelines:
+- Explore with the read-only tools (read_file, grep, glob, web_fetch, and gated bash) to ground the plan in the actual codebase before writing it.
+- Produce a complete, numbered, actionable plan: each step has a clear goal (ideally independently dispatchable and verifiable), names the files/paths it touches, and notes any expected risks.
+- Submit the FULL plan with the `plan` tool — that plan is this run's product.
+- Do NOT try to implement anything yourself: write_file, edit_file, and task are disabled here."#;
+
+/// Instructions appended to the system prompt in edit mode: revise an existing
+/// plan and submit the complete revised version via the `plan` tool.
+pub const MODE_EDIT_INSTRUCTIONS: &str = r#"You are revising an existing plan. You will be shown the current plan and a revision request.
+
+Guidelines:
+- Keep the parts the request does not touch unchanged.
+- Output the COMPLETE revised plan (not a diff) via the `plan` tool; one run produces one revised plan file.
+- write_file, edit_file, and task are disabled here — you have only the read-only tools and `plan`."#;
+
+/// Instructions appended to the system prompt in run mode: execute the plan,
+/// dispatching independent steps to sub-agents via `task`.
+pub const MODE_RUN_INSTRUCTIONS: &str = r#"You are executing a plan. The plan text is your objective and a fixed input — do not change it (`plan` is disabled).
+
+Guidelines:
+- Work through the plan's steps in order.
+- Dispatch independent, well-scoped steps to sub-agents with the `task` tool, passing any findings the sub-agent needs as `context`. Do tightly coupled work yourself.
+- If reality diverges from the plan, report the deviation in your final answer rather than editing the plan."#;
+
 /// Resolve a prefix/suffix value that may be either a literal string or a
 /// path to a file. If `value` names an existing readable file on disk, its
 /// contents are returned; otherwise `value` is treated as a literal string.
@@ -82,6 +110,7 @@ mod tests {
             thinking_effort: crate::config::ThinkingEffort::None,
             extra_headers: vec![],
             max_turns: 5,
+            task_max_turns: None,
             deny_tools: vec![],
             gate_enabled: true,
             max_tool_result_bytes: 1000,
@@ -109,5 +138,13 @@ mod tests {
         let built = crate::persona::build(&test_cfg(Some("you are the BOX".into()))).unwrap();
         assert!(!built.contains("lightweight autonomous CLI agent"));
         assert!(built.contains("you are the BOX"));
+    }
+
+    #[test]
+    fn mode_instructions_cover_the_workflow() {
+        // Plan mode must point at the `plan` tool; run mode at executing via `task`.
+        assert!(crate::persona::MODE_PLAN_INSTRUCTIONS.contains("plan` tool"));
+        assert!(crate::persona::MODE_EDIT_INSTRUCTIONS.contains("COMPLETE revised plan"));
+        assert!(crate::persona::MODE_RUN_INSTRUCTIONS.contains("`task`"));
     }
 }

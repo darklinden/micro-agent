@@ -3,9 +3,17 @@
 
 Behavior (driven by inspecting the request messages):
   * If the last user message mentions "safety judge"  -> gate prompt -> {"allow":true}
-  * Else if the history already contains a tool result / assistant tool_calls
-      -> the follow-up turn -> emit a plain-text final answer.
-  * Else (first turn) -> emit one tool_call for `bash` ("echo hi from mock").
+  * If there is no tool history yet and the first user message starts with a
+    mode marker, emit that mode's tool_call:
+      - "mock:plan" / "mock:edit" -> the `plan` tool (writes a plan file)
+      - "mock:run"               -> the `task` tool (dispatches a sub-agent)
+    Otherwise (e.g. a sub-agent's own first turn) -> `bash`.
+  * Once any tool history exists (a tool result or an assistant tool_call) ->
+    a plain-text final answer (ends the loop).
+
+So `ma -p "mock:plan ..."` writes a plan and prints its path, while
+`ma -r <plan> "mock:run ..."` dispatches a sub-agent whose first turn falls
+through to the `bash` default.
 """
 
 import json
@@ -40,25 +48,45 @@ def text_chunk(t, finish=None):
 
 
 def decide(messages):
-    # Gate prompt?
+    # Gate prompt -> allow.
     for m in reversed(messages):
         if m.get("role") == "user":
             c = m.get("content")
             if isinstance(c, str) and "safety judge" in c:
                 return [sse(text_chunk('{"allow": true, "reason": "test ok"}', "stop"))]
             break
-    # Follow-up with tool history?
+
+    first_user = next(
+        (m.get("content") for m in messages
+         if m.get("role") == "user" and isinstance(m.get("content"), str)),
+        "",
+    )
     has_tool = any(m.get("role") == "tool" for m in messages) or any(
         m.get("tool_calls") for m in messages if m.get("role") == "assistant"
     )
-    if has_tool:
+
+    # First turn, no tool history yet -> the tool_call requested by the marker.
+    # (Run mode wraps the plan in a code block, so match anywhere, not just a LEAD.)
+    if not has_tool:
+        if "mock:plan" in first_user or "mock:edit" in first_user:
+            return [
+                sse(tool_call_chunk("plan", json.dumps({"plan": "1. mock step\n2. done"}))),
+                sse(text_chunk("", "stop")),
+            ]
+        if "mock:run" in first_user:
+            return [
+                sse(tool_call_chunk("task", json.dumps({"task": "run the mock sub-step and report"}))),
+                sse(text_chunk("", "stop")),
+            ]
+        # Default (including a sub-agent's own first turn) -> bash.
         return [
-            sse(text_chunk("Final answer: the tool ran successfully.", None)),
+            sse(tool_call_chunk("bash", '{"command": "echo hi from mock"}')),
             sse(text_chunk("", "stop")),
         ]
-    # First turn -> tool call.
+
+    # Follow-up with tool history -> plain-text final answer ends the loop.
     return [
-        sse(tool_call_chunk("bash", '{"command": "echo hi from mock"}')),
+        sse(text_chunk("Final answer: the tool ran successfully.", None)),
         sse(text_chunk("", "stop")),
     ]
 

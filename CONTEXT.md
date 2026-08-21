@@ -12,9 +12,25 @@
 
 `ma` 的主循环：把对话发给 Upstream，**流式**把模型文本打到 stdout，执行模型请求的工具调用并把结果回喂，直到模型给出纯文本答复或撞到回合预算 `MA_MAX_TURNS`。_Avoid_: chatbot, repl, interactive.
 
+## 工作流（Workflow）
+
+三种互斥模式的选择由 CLI 结构强制（没有计划就没有 `-r` 的输入，无需运行时门禁）：
+- `-p/--plan` 规划：只用读工具探索，用 `plan` 工具提交编号计划；打印计划全文与 `[plan] <路径>`。
+- `-e/--edit-plan` + `-c/--change` 修改：修订既有计划，写**新时间戳文件**（旧版保留成演进链），输出新路径。
+- `-r/--run` 执行：按计划逐步执行，独立步骤用 `task` 派发给子代理；`plan` 被冻结（禁用）。
+模式 = deny 叠加 + 模式提示词（`MODE_PLAN/EDIT/RUN_INSTRUCTIONS`）+ objective 构造；deny 只叠加不删除用户的 `MA_DENY_TOOLS`。
+
 ## 工具
 
-模型可以调用的能力集合 = 内置工具 + MCP 工具（带 `mcp:` 前缀）。内置 8 个：`read_file` `write_file` `edit_file` `grep` `glob` `bash` `task` `web_fetch`。_Avoid_: function, plugin.
+模型可以调用的能力集合 = 内置工具 + MCP 工具（带 `mcp:` 前缀）。内置 9 个：`read_file` `write_file` `edit_file` `grep` `glob` `bash` `plan` `task` `web_fetch`。`plan` 提交/更新本运行的编号计划（打印全文、原子写入 `.ma/plans/<yyyymmdd-hhmmss>.md`）；`task` 派发一个子代理执行聚焦子任务（独立回合循环、最终报告作为工具结果、不可嵌套）。_Avoid_: function, plugin.
+
+## 子代理（Sub-agent）
+
+由 `task` 派发的嵌套 `Agent` 运行，深度上限 1；看不到父对话，最终消息即报告；stdout 静默（仅 `[task] started/finished` 横幅），细节进日志（`depth` 字段）；回合预算 `MA_TASK_MAX_TURNS`（缺省继承 `MA_MAX_TURNS`）。_Avoid_: process, thread, spawn（非操作系统进程）、plan mode、approval.
+
+## 计划文件（Plan file）
+
+`.ma/plans/<yyyymmdd-hhmmss>.md` 一次运行一份；`edit` 产生新时间戳文件、旧版保留成演进链。写入走同目录 `.tmp` + `rename` 原子替换——进程中段被杀只会留下旧版或完整新版，绝不截断。_Avoid_: plan mode.
 
 ## 安全闸门（Gate）
 
@@ -40,5 +56,7 @@ Model Context Protocol 客户端，支持 **stdio**（子进程）与 **SSE**（
 - MCP 工具统一 `mcp:` 前缀
 - 系统提示词 prefix/suffix/persona 三段式
 - 输出 stdout/日志分离
+- 三段式工作流：`-p` plan / `-e -c` edit / `-r` run，顺序由 CLI 结构强制（0006）
+- 计划 `.ma/plans/<ts>.md`，edit 写新时间戳文件；`task` 派发子代理（深度 1）（0006）
 
 详见 `docs/adr/`。

@@ -95,6 +95,8 @@ pub struct Config {
 
     // Agent behaviour
     pub max_turns: usize,
+    /// Turn budget for a `task` sub-agent; `None` inherits `max_turns`.
+    pub task_max_turns: Option<usize>,
     /// Comma-separated names of tools that must not be invoked (e.g. `bash`).
     pub deny_tools: Vec<String>,
     /// Whether the LLM safety gate guards `bash` execution. `MA_GATE=0` disables.
@@ -157,6 +159,10 @@ pub fn from_env() -> Result<Config> {
         .transpose()?
         .unwrap_or(20);
 
+    let task_max_turns = get_opt("MA_TASK_MAX_TURNS")
+        .map(|v| v.parse().context("MA_TASK_MAX_TURNS must be an integer"))
+        .transpose()?;
+
     let deny_tools = get_opt("MA_DENY_TOOLS")
         .map(|v| {
             v.split(',')
@@ -204,6 +210,7 @@ pub fn from_env() -> Result<Config> {
         thinking_effort,
         extra_headers: parse_extra_headers(),
         max_turns,
+        task_max_turns,
         deny_tools,
         gate_enabled,
         max_tool_result_bytes,

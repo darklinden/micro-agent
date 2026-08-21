@@ -1,8 +1,9 @@
 # ma — a lightweight autonomous CLI agent
 
-`ma` is a minimal, TUI-free agent in the spirit of `claude -p`: you give it a
-task on the command line, and it drives a tool loop (built-in tools + MCP)
-against an upstream LLM until it has an answer.
+`ma` is a minimal, TUI-free agent in the spirit of `claude -p`. It runs a
+**plan → edit → run** workflow: plan a task, revise the plan, then execute it —
+dispatching independent steps to sub-agents. Each step drives a tool loop
+(built-in tools + MCP) against an upstream LLM.
 
 Everything is configured through environment variables. No config files, no
 trust prompts — the working directory is trusted and tools run autonomously
@@ -22,7 +23,8 @@ export MA_UPSTREAM_MODEL=deepseek-v4-flash
 # export MA_UPSTREAM_URL=https://api.anthropic.com/v1
 # export MA_UPSTREAM_API_KEY=sk-ant-...
 
-ma -p "read the README and summarize it in three bullets"
+ma -p "read the README and propose a CI layout"   # plan -> prints plan + [plan] path
+ma -r .ma/plans/<latest>.md                        # execute it (dispatches sub-agents)
 ```
 
 A `.env` file in the working directory is loaded at startup (existing env vars
@@ -37,21 +39,33 @@ cargo build --release
 
 ## Usage
 
+Three modes — exactly one per invocation:
+
 ```bash
-ma -p "task text"      # run a task, print result to stdout, exit
+# 1) Plan: explore (read-only) and write a numbered plan. Prints the plan text
+#    to stdout, then the saved path as `[plan] .ma/plans/<ts>.md`.
+ma -p "read the README and propose a CI layout"
+
+# 2) Edit: revise an existing plan; writes a NEW timestamped plan file (the old
+#    one is kept), then prints the revised plan and its path.
+ma -e .ma/plans/20260821-093000.md -c "add a lint step"
+
+# 3) Run: execute a plan, dispatching independent steps to sub-agents via `task`.
+ma -r .ma/plans/20260821-093000.md
+
 ma --list-tools        # list all available tools (incl. MCP) and exit
 ma --help
 ```
 
-`-p/--prompt` is required — there is no stdin-prompt fallback; running without
-it exits with code 2.
+`-e/--edit-plan` requires `-c/--change`; `-e`/`-r` paths must exist. There is no
+stdin-prompt fallback — misuse exits with code 2.
 
 ### Exit codes
 
 | code | meaning                                              |
 |------|------------------------------------------------------|
-| 0    | agent finished with a plain-text answer             |
-| 2    | configuration error, task error, or `MA_MAX_TURNS` hit |
+| 0    | plan/edit wrote a plan; run finished with a plain-text answer |
+| 2    | configuration error, task/CLI error, plan/edit produced no plan, or `MA_MAX_TURNS` hit |
 
 ## How it works
 
@@ -68,6 +82,23 @@ it exits with code 2.
 
 Everything runs autonomously: no human approval prompts and no "trust this
 folder?" step. Safety comes from `MA_DENY_TOOLS` and the bash safety gate.
+
+## Plans & sub-agents
+
+- **Planning** is the `plan` tool: it prints and saves a numbered plan to
+  `.ma/plans/<yyyymmdd-hhmmss>.md`. In `-p`/`-e` mode `write_file`/`edit_file`/
+  `task` are disabled, so the agent can only explore and submit a plan. `-e`
+  writes a **new** timestamped file — old versions are kept as a revision chain.
+  Plan writes are atomic (`.tmp` + `rename`): a kill mid-write never leaves a
+  truncated plan.
+- **Execution** (in `-r` mode) uses the `task` tool: each call spawns a
+  sub-agent with its own tool loop, its own `SUBAGENT_PERSONA`, and its own
+  safety gate, then returns the sub-agent's final report as the tool result.
+  Sub-agents are **quiet** on stdout (only `[task] started/finished` banners;
+  detail goes to the log); nesting is capped at depth 1 (sub-agents cannot call
+  `task`). Budget via `MA_TASK_MAX_TURNS` (default: `MA_MAX_TURNS`).
+
+
 
 ## Env variables
 
@@ -93,6 +124,7 @@ the `ai-bridge` convention.
 | variable                 | default   | meaning                                                          |
 |--------------------------|-----------|------------------------------------------------------------------|
 | `MA_MAX_TURNS`           | `20`      | max tool-loop iterations before giving up (exit 2)               |
+| `MA_TASK_MAX_TURNS`      | `MA_MAX_TURNS` | turn budget for each `task` sub-agent                       |
 | `MA_DENY_TOOLS`          | —         | comma-separated tool names that must never run (e.g. `bash`)     |
 | `MA_GATE`                | `1`       | `0` disables the bash safety gate (pure auto)                    |
 | `MA_MAX_TOOL_RESULT_BYTES` | `32768` | cap on tool output fed back into context                         |
@@ -184,7 +216,8 @@ All request/response/tool detail goes to the log file.
 | `grep`        | `pattern`, `path?`, `file_glob?`                      | substring match            |
 | `glob`        | `pattern`                                             |                            |
 | `bash`        | `command`                                             | **gated by safety gate**   |
-| `task`        | `task`                                                | record a sub-task / step   |
+| `plan`        | `plan`                                                | save+print this run's numbered plan to `.ma/plans/` |
+| `task`        | `task`, `context?`                                    | dispatch a sub-agent; returns its report (no nesting) |
 | `web_fetch`   | `url`, `max_bytes?`                                   | GET a URL                  |
 
 Tool arguments are JSON objects (e.g. `{"path": "src/main.rs"}`).
@@ -192,6 +225,6 @@ Tool arguments are JSON objects (e.g. `{"path": "src/main.rs"}`).
 ## Documentation
 
 - `CONTEXT.md` — domain glossary
-- `docs/adr/` — architectural decisions (upstream type, turn loop, gate, MCP, system prompt)
+- `docs/adr/` — architectural decisions (upstream type, turn loop, gate, MCP, system prompt, plan/edit/run workflow)
 - `manual-test/mock_upstream.py` — a local mock upstream for end-to-end testing
   of the agent loop without a real API key

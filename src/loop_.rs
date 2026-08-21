@@ -21,39 +21,77 @@ pub enum RunResult {
     MaxTurns,
 }
 
+/// What a completed run produced, beyond the exit-code-relevant result.
+#[derive(Debug, Clone)]
+pub struct RunOutcome {
+    pub result: RunResult,
+    /// Final assistant plain-text reply (empty unless `result == Done`).
+    pub final_text: String,
+    /// Turns the loop actually ran.
+    pub turns: usize,
+}
+
 pub struct Agent<'a> {
     pub cfg: &'a Config,
     pub upstream: &'a dyn Upstream,
     pub system: String,
     pub objective: String,
     pub mcp: &'a McpPool,
+    /// Sub-agent nesting depth: 0 = top-level run, >=1 = inside a `task`
+    /// dispatch. Depth > 0 implies quiet (no stdout output).
+    pub depth: u32,
+    /// Turn budget for THIS loop (top level: cfg.max_turns; sub-agents:
+    /// MA_TASK_MAX_TURNS or inherited).
+    pub max_turns: usize,
+    /// Shared record of this run's plan file path, so the caller (main) can
+    /// print it after the run. `None` -> the run creates a fresh one (sub-agents).
+    pub plan_path: Option<std::sync::Arc<std::sync::Mutex<Option<std::path::PathBuf>>>>,
 }
 
 impl<'a> Agent<'a> {
-    /// Run the full agent loop. Returns the exit-code-relevant result.
-    pub async fn run(&self) -> anyhow::Result<RunResult> {
+    fn quiet(&self) -> bool {
+        self.depth > 0
+    }
+
+    /// Run the full agent loop. Returns the exit-code-relevant result plus the
+    /// final text and turn count.
+    pub async fn run(&self) -> anyhow::Result<RunOutcome> {
         let tools: Vec<ToolDef> = build_tools(self.mcp);
         let mut messages = vec![Message::user_text(self.objective.clone())];
+        let plan_path = self
+            .plan_path
+            .clone()
+            .unwrap_or_else(|| std::sync::Arc::new(std::sync::Mutex::new(None)));
         let ctx = ToolCtx {
             cfg: self.cfg,
             mcp: self.mcp,
+            upstream: self.upstream,
             gate: Gate::new(self.upstream, &self.objective),
+            depth: self.depth,
+            plan_path,
         };
 
-        out::user_block(0, &self.objective);
+        if !self.quiet() {
+            out::user_block(0, &self.objective);
+        }
 
-        for turn in 0..self.cfg.max_turns {
-            tracing::info!(turn, "turn start");
+        for turn in 0..self.max_turns {
+            tracing::info!(turn, depth = self.depth, "turn start");
 
             let (tx, mut rx): (tokio::sync::mpsc::UnboundedSender<StreamEvent>, _) =
                 tokio::sync::mpsc::unbounded_channel();
             // Drain streamed, tag-aware output to stdout on a separate task
             // (chat is awaited inline below so the turn loop stays sequential).
+            // A quiet (sub-agent) run still drains the channel — upstreams
+            // ignore send errors — but prints nothing.
+            let quiet = self.quiet();
             let turn = turn as u32;
             let drain = tokio::spawn(async move {
                 let mut printer = out::TurnPrinter::new(turn);
                 while let Some(ev) = rx.recv().await {
-                    printer.event(ev);
+                    if !quiet {
+                        printer.event(ev);
+                    }
                 }
                 printer.close();
             });
@@ -89,15 +127,23 @@ impl<'a> Agent<'a> {
 
             // Plain-text reply -> done.
             if outcome.tool_calls.is_empty() {
-                out::text("\n");
+                if !self.quiet() {
+                    out::text("\n");
+                }
                 tracing::info!(turn, "agent finished (no tool calls)");
-                return Ok(RunResult::Done);
+                return Ok(RunOutcome {
+                    result: RunResult::Done,
+                    final_text: outcome.assistant_text.clone(),
+                    turns: turn as usize + 1,
+                });
             }
 
             // Execute tools and feed results back.
             let mut result_blocks: Vec<ContentBlock> = Vec::new();
             for c in &outcome.tool_calls {
-                out::run_marker(turn, &c.name, &c.arguments);
+                if !self.quiet() {
+                    out::run_marker(turn, &c.name, &c.arguments);
+                }
                 let r = run_tool(&c.name, &c.arguments, &ctx).await;
                 tracing::debug!(
                     tool = %c.name,
@@ -126,9 +172,15 @@ impl<'a> Agent<'a> {
             tracing::info!(turns_processed = turn + 1, "turn complete");
         }
 
-        out::text("\n");
-        out::banner("[reached MA_MAX_TURNS limit; stopping]");
-        tracing::warn!(max_turns = self.cfg.max_turns, "hit max turns");
-        Ok(RunResult::MaxTurns)
+        if !self.quiet() {
+            out::text("\n");
+            out::banner("[reached turn limit; stopping]");
+        }
+        tracing::warn!(max_turns = self.max_turns, "hit turn limit");
+        Ok(RunOutcome {
+            result: RunResult::MaxTurns,
+            final_text: String::new(),
+            turns: self.max_turns,
+        })
     }
 }

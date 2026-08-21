@@ -48,6 +48,15 @@ pub struct McpPool {
 }
 
 impl McpPool {
+    /// An empty pool (no servers, no tools) for tests.
+    #[cfg(test)]
+    pub(crate) fn empty() -> Self {
+        McpPool {
+            defs: Vec::new(),
+            connections: Vec::new(),
+        }
+    }
+
     pub async fn connect(cfg: &Config) -> Result<McpPool> {
         let timeout = std::time::Duration::from_millis(cfg.mcp_list_tools_timeout_ms);
         let mut defs: Vec<ToolDef> = Vec::new();

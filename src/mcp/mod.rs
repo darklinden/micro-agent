@@ -1,7 +1,7 @@
 //! MCP (Model Context Protocol) client pool.
 //!
 //! Connects to configured MCP servers — stdio (child process) or SSE — lists
-//! their tools with an `mcp:` prefix, and routes tool calls back to them.
+//! their tools with an `mcp-` prefix, and routes tool calls back to them.
 
 use crate::config::Config;
 use crate::toolchain::ToolOutput;
@@ -42,7 +42,7 @@ struct McpConnection {
 
 /// Pool of all connected MCP servers.
 pub struct McpPool {
-    /// `mcp:<server>:<tool>` defs exposed to the model.
+    /// `mcp-<server>-<tool>` defs exposed to the model.
     defs: Vec<ToolDef>,
     connections: Vec<(String, McpConnection)>,
 }
@@ -83,7 +83,7 @@ impl McpPool {
                     .unwrap_or("(no description)")
                     .to_string();
                 defs.push(ToolDef {
-                    name: format!("mcp:{}:{}", sc.name, t.name),
+                    name: format!("mcp-{}--{}", sc.name, t.name),
                     description: format!("MCP tool (server `{}`): {desc}", sc.name),
                     input_schema: schema,
                 });
@@ -95,16 +95,16 @@ impl McpPool {
         Ok(McpPool { defs, connections })
     }
 
-    /// Tool definitions exposed to the model (MCP tools carry `mcp:` prefix).
+    /// Tool definitions exposed to the model (MCP tools carry `mcp-` prefix).
     pub fn tools_defs(&self) -> Vec<ToolDef> {
         self.defs.clone()
     }
 
-    /// Call an MCP tool by its `mcp:`-stripped `server:tool` name.
+    /// Call an MCP tool by its `mcp-`-stripped `server--tool` name.
     pub async fn call(&self, full: &str, args: &Value) -> ToolOutput {
-        let Some((server, tool)) = full.split_once(':') else {
+        let Some((server, tool)) = full.split_once("--") else {
             return ToolOutput {
-                content: format!("invalid MCP tool name `{full}` (expected `server:tool`)"),
+                content: format!("invalid MCP tool name `{full}` (expected `server--tool`)"),
                 is_error: true,
             };
         };

@@ -1,7 +1,7 @@
 //! Tool registry, dispatch, and the bash safety gate.
 //!
 //! The model sees one merged list: built-in tools plus MCP tools (MCP tools
-//! carry an `mcp:` prefix). Dispatch routes a call to a built-in or to the
+//! carry an `mcp-` prefix). Dispatch routes a call to a built-in or to the
 //! matching MCP server, applying the deny-list and the bash gate when needed.
 
 pub mod builtin;
@@ -46,7 +46,7 @@ pub fn build_tools(mcp: &McpPool) -> Vec<ToolDef> {
     tools
 }
 
-/// Execute a tool by its full name (built-in or `mcp:<server>:<tool>`).
+/// Execute a tool by its full name (built-in or `mcp-<server>--<tool>`).
 pub async fn run_tool(name: &str, args: &Value, ctx: &ToolCtx<'_>) -> ToolOutput {
     // 1. Deny-list (immediate, no execution path).
     if ctx.cfg.deny_tools.iter().any(|d| d == name) {
@@ -77,7 +77,7 @@ pub async fn run_tool(name: &str, args: &Value, ctx: &ToolCtx<'_>) -> ToolOutput
     }
 
     // 3. MCP tools.
-    if let Some(rest) = name.strip_prefix("mcp:") {
+    if let Some(rest) = name.strip_prefix("mcp-") {
         return ctx.mcp.call(rest, args).await;
     }
 

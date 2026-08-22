@@ -40,14 +40,15 @@ Guidelines:
 - Output the COMPLETE revised plan (not a diff) via the `plan` tool; one run produces one revised plan file.
 - write_file, edit_file, and task are disabled here — you have only the read-only tools and `plan`."#;
 
-/// Instructions appended to the system prompt in run mode: execute the plan,
-/// dispatching independent steps to sub-agents via `task`.
-pub const MODE_RUN_INSTRUCTIONS: &str = r#"You are executing a plan. The plan text is your objective and a fixed input — do not change it (`plan` is disabled).
+/// Instructions appended to the system prompt in run mode: execute the task,
+/// dispatching independent steps to sub-agents via `task`. Serves both a plan
+/// file (the fenced plan text is the objective) and an ad-hoc task prompt.
+pub const MODE_RUN_INSTRUCTIONS: &str = r#"You are executing a task. The objective below is your fixed input — do not change it (`plan` is disabled).
 
 Guidelines:
-- Work through the plan's steps in order.
-- Dispatch independent, well-scoped steps to sub-agents with the `task` tool, passing any findings the sub-agent needs as `context`. Do tightly coupled work yourself.
-- If reality diverges from the plan, report the deviation in your final answer rather than editing the plan."#;
+- Work through the task in order (for a plan run, that means the plan's steps).
+- Dispatch independent, well-scoped sub-tasks to sub-agents with the `task` tool, passing any findings the sub-agent needs as `context`. Do tightly coupled work yourself.
+- If reality diverges from the objective, report the deviation in your final answer rather than editing it."#;
 
 /// Resolve a prefix/suffix value that may be either a literal string or a
 /// path to a file. If `value` names an existing readable file on disk, its

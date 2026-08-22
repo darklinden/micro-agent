@@ -3,6 +3,18 @@
 - Status: Accepted
 - Date: 2026-08-21
 
+## Amendment (2026-08-22)
+
+`-r/--run` no longer strictly requires a plan file on disk. A `-r` value that
+is not an existing file is treated as an ad-hoc requirement prompt and executed
+directly in run mode — same deny overlay (`plan` disabled, `task` allowed) and
+same objective → exit-code mapping. A non-existent value that still *looks like*
+a path (no whitespace, and a `/`, a leading `.` or `/`, or a `.md` suffix)
+hard-errors with code 2, catching mistyped plan paths. The plan→edit→run
+*practice* is unchanged (`-p` then `-r <plan>` still works), and this does not
+resurrect the removed `-p/--prompt` single-prompt mode; the value runs with
+run-mode semantics, not planning semantics.
+
 ## Context
 
 Claude Code implements "plan mode" as a permission mode: everything becomes

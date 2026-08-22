@@ -25,6 +25,7 @@ export MA_UPSTREAM_MODEL=deepseek-v4-flash
 
 ma -p "read the README and propose a CI layout"   # plan -> prints plan + [plan] path
 ma -r .ma/plans/<latest>.md                        # execute it (dispatches sub-agents)
+ma -r "add a changelog section for the new flags"  # or run a task prompt directly
 ```
 
 A `.env` file in the working directory is loaded at startup (existing env vars
@@ -50,22 +51,28 @@ ma -p "read the README and propose a CI layout"
 #    one is kept), then prints the revised plan and its path.
 ma -e .ma/plans/20260821-093000.md -c "add a lint step"
 
-# 3) Run: execute a plan, dispatching independent steps to sub-agents via `task`.
+# 3) Run: execute a plan, or run a task prompt directly — dispatching
+#    independent steps to sub-agents via `task`.
 ma -r .ma/plans/20260821-093000.md
+ma -r "add a changelog section for the new flags"
 
 ma --list-tools        # list all available tools (incl. MCP) and exit
 ma --help
 ```
 
-`-e/--edit-plan` requires `-c/--change`; `-e`/`-r` paths must exist. There is no
-stdin-prompt fallback — misuse exits with code 2.
+`-e/--edit-plan` requires `-c/--change`; `-e` accepts an existing plan path only.
+`-r` takes an existing plan file to execute, or a task description to run
+directly: a value that is neither an existing file nor path-shaped is run as a
+prompt, while a non-existent value that still looks like a file path (e.g. a
+mistyped `missing.md`) errors with code 2. There is no stdin-prompt fallback —
+misuse exits with code 2.
 
 ### Exit codes
 
 | code | meaning                                              |
 |------|------------------------------------------------------|
 | 0    | plan/edit wrote a plan; run finished with a plain-text answer |
-| 2    | configuration error, task/CLI error, plan/edit produced no plan, or `MA_MAX_TURNS` hit |
+| 2    | configuration error, task/CLI error, a `-r` value that looks like a missing plan path, plan/edit produced no plan, or `MA_MAX_TURNS` hit |
 
 ## How it works
 

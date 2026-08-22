@@ -35,9 +35,10 @@ struct Cli {
     #[arg(short = 'c', long = "change")]
     change: Option<String>,
 
-    /// Path of the plan file to execute.
+    /// An existing plan file to execute, or — when the value is not an existing
+    /// file and not path-shaped — a task description to run directly.
     #[arg(short = 'r', long = "run")]
-    run: Option<PathBuf>,
+    run: Option<String>,
 
     /// List available tools and exit.
     #[arg(long = "list-tools")]
@@ -80,6 +81,55 @@ fn resolve_mode(cli: &Cli) -> Result<Mode> {
     } else {
         Ok(Mode::Run)
     }
+}
+
+/// What a `-r/--run` argument should be treated as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RunInput {
+    /// Existing file on disk: read it as the plan to execute.
+    Plan(PathBuf),
+    /// Not an existing file and not path-shaped: an ad-hoc task prompt.
+    Prompt(String),
+}
+
+/// Classify a `-r/--run` argument.
+///
+/// Existing file -> `Plan` (read it, current behavior). Not an existing file
+/// but path-shaped -> `Err` (catches a mistyped plan path). Anything else is a
+/// requirement prompt to run directly in run mode.
+fn classify_run(value: &str) -> Result<RunInput, String> {
+    let path = Path::new(value);
+    if path.is_file() {
+        return Ok(RunInput::Plan(path.to_path_buf()));
+    }
+    if looks_like_path(value) {
+        return Err(format!(
+            "plan file does not exist: {value}\n\
+             hint: -r/--run takes an existing plan file OR a task prompt to run \
+             directly. A prompt must not look like a file path: no '.md' suffix, \
+             no leading '.' or '/', no '/' separator — and it may contain spaces."
+        ));
+    }
+    Ok(RunInput::Prompt(value.to_string()))
+}
+
+/// Path-shape heuristic for a non-existent `-r` value: no whitespace AND
+/// (contains '/', or starts with '.' or '/', or ends with ".md").
+///
+/// Consequences, both intended:
+///   * "refactor src/main.rs" has spaces -> a Prompt, never a path.
+///   * a bare whitespace-less token like "src/main.rs", "feature/foo.md",
+///     ".env" or "/x" IS path-shaped and hard-errors. This is the accepted
+///     trade-off: real task prompts are sentences (they contain spaces), and
+///     the error message tells the user to rephrase.
+fn looks_like_path(value: &str) -> bool {
+    if value.chars().any(char::is_whitespace) {
+        return false;
+    }
+    value.contains('/')
+        || value.starts_with('/')
+        || value.starts_with('.')
+        || value.ends_with(".md")
 }
 
 fn usage_error(msg: &str) -> ! {
@@ -218,15 +268,23 @@ async fn run(mut cfg: config::Config, cli: Cli, mode: Mode) -> Result<i32> {
         }
         Mode::Run => {
             cfg.deny_tools.extend(["plan"].into_iter().map(str::to_string));
-            let path = cli.run.as_ref().expect("validated above");
-            let content = std::fs::read_to_string(path)
-                .unwrap_or_else(|e| usage_error(&format!("cannot read plan {}: {e}", path.display())));
+            let value = cli.run.as_deref().expect("validated above");
+            let objective = match classify_run(value) {
+                Ok(RunInput::Plan(path)) => {
+                    let content = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                        usage_error(&format!("cannot read plan {}: {e}", path.display()))
+                    });
+                    format!(
+                        "Execute the following plan:\n\n```\n{content}\n```\n\nPlan file: {}",
+                        path.display()
+                    )
+                }
+                Ok(RunInput::Prompt(prompt)) => format!("Task:\n\n{prompt}"),
+                Err(msg) => usage_error(&msg),
+            };
             (
                 format!("{base_system}\n\n{}", persona::MODE_RUN_INSTRUCTIONS),
-                format!(
-                    "Execute the following plan:\n\n```\n{content}\n```\n\nPlan file: {}",
-                    path.display()
-                ),
+                objective,
             )
         }
     };
@@ -269,7 +327,7 @@ async fn run(mut cfg: config::Config, cli: Cli, mode: Mode) -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_mode, Cli, Mode};
+    use super::{classify_run, looks_like_path, resolve_mode, Cli, Mode, RunInput};
 
     fn cli(
         plan: Option<&str>,
@@ -281,7 +339,7 @@ mod tests {
             plan: plan.map(String::from),
             edit_plan: edit_plan.map(Into::into),
             change: change.map(String::from),
-            run: run.map(Into::into),
+            run: run.map(String::from),
             list_tools: false,
         }
     }
@@ -308,5 +366,53 @@ mod tests {
             resolve_mode(&cli(None, Some("e"), Some("c"), None)).unwrap(),
             Mode::Edit
         );
+    }
+
+    #[test]
+    fn looks_like_path_basics() {
+        assert!(looks_like_path("missing.md"));
+        assert!(looks_like_path("./x"));
+        assert!(looks_like_path("/x"));
+        assert!(looks_like_path("/"));
+        assert!(looks_like_path(".ma/plans/x.md"));
+        assert!(looks_like_path("src/main.rs")); // bare token, no spaces
+        assert!(!looks_like_path("lint"));
+        assert!(!looks_like_path("add a task"));
+        assert!(!looks_like_path("refactor src/main.rs")); // a space saves it
+        assert!(!looks_like_path("fix the bug in src/main.rs"));
+    }
+
+    #[test]
+    fn classify_run_existing_file_is_plan() {
+        let dir = std::env::temp_dir().join(format!("ma-classify-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("proj.md");
+        std::fs::write(&p, "1. do a thing\n").unwrap();
+        assert!(matches!(
+            classify_run(p.to_str().unwrap()).unwrap(),
+            RunInput::Plan(ref got) if got == &p
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn classify_run_path_shaped_but_missing_is_err() {
+        for b in ["missing.md", "./gone", "/nonexistent-dir-x", ".ma/plans/nope.md"] {
+            let e = classify_run(b).expect_err(b);
+            assert!(e.contains("plan file does not exist"), "{b}: {e}");
+        }
+    }
+
+    #[test]
+    fn classify_run_prompt_cases() {
+        assert_eq!(
+            classify_run("add a changelog section"),
+            Ok(RunInput::Prompt("add a changelog section".into()))
+        );
+        assert_eq!(
+            classify_run("fix the bug in src/main.rs"),
+            Ok(RunInput::Prompt("fix the bug in src/main.rs".into()))
+        );
+        assert_eq!(classify_run("lint"), Ok(RunInput::Prompt("lint".into())));
     }
 }

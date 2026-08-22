@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository.
 
 ## What this is
 
-`ma` is a lightweight, TUI-free autonomous CLI agent (a mini Claude Code) written in Rust (edition 2024). It runs a three-mode plan→edit→run workflow: `-p` writes a numbered plan (and prints it with its path), `-e <plan> -c <req>` revises one, and `-r <plan>` executes it by dispatching independent steps to sub-agents via the `task` tool. Each Agent drives a tool loop against an upstream LLM — calling tools, feeding results back, iterating until it returns plain text. Everything is configured through environment variables (`.env` is loaded at startup); there are no config files and no trust/approval prompts.
+`ma` is a lightweight, TUI-free autonomous CLI agent (a mini Claude Code) written in Rust (edition 2024). It runs a three-mode plan→edit→run workflow: `-p` writes a numbered plan (and prints it with its path), `-e <plan> -c <req>` revises one, and `-r` executes a plan — or, given a task description instead of a plan path, runs that directly — dispatching independent steps to sub-agents via the `task` tool. Each Agent drives a tool loop against an upstream LLM — calling tools, feeding results back, iterating until it returns plain text. Everything is configured through environment variables (`.env` is loaded at startup); there are no config files and no trust/approval prompts.
 
 Key docs:
 - `README.md` — full user-facing docs: env vars, usage, exit codes.
@@ -37,6 +37,13 @@ cargo run -- -r .ma/plans/<ts>.md            # run; first turn defaults to `bash
 ```
 
 To exercise a real `task` dispatch under the mock in run mode, make the plan's first line start with `mock:run` (run mode's objective is the plan text, which the mock reads as the first user message).
+
+- **Direct prompt, no plan file:** `cargo run -- -r "mock:run add a TODO parser"`. The
+  prompt becomes the first user message, so the mock's `mock:run` substring match
+  fires and it emits a `task` call.
+- **Mistyped plan path:** `cargo run -- -r .ma/plans/does-not-exist.md; echo $?`
+  prints `error: plan file does not exist: ...` + a hint and exits 2 before any
+  upstream request, so the mock need not be running.
 
 ## Architecture
 

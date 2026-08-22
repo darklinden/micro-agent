@@ -294,6 +294,12 @@ fn plan_tool(
         Err(e) => return err(format!("failed to write plan: {e}")),
     };
     *state.lock().unwrap() = Some(path.clone());
+    // Audit trail: the plan path is a first-class run outcome.
+    crate::sesslog::emit(
+        crate::sesslog::Level::Info,
+        "plan_saved",
+        serde_json::json!({"path": path.display().to_string(), "bytes": plan.len()}),
+    );
     // Print the full plan to stdout so the run "writes the plan and prints it".
     crate::out::banner(&format!("\n[plan] {}\n{}\n", path.display(), plan));
     ok(format!(

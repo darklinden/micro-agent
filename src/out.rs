@@ -4,7 +4,7 @@
 //! model stream is labelled per turn block (`[user #NNN]`,
 //! `[assistant #NNN think|answer]`, `[assistant #NNN run] ( tool args )`) so a
 //! multi-turn run is easy to follow. All full request/response detail lives in
-//! the log file (see [`crate::logger`]) — this only summarizes.
+//! the log file (see [`crate::sesslog`]) — this only summarizes.
 
 use crate::types::StreamEvent;
 use std::io::{BufWriter, Write};

@@ -66,11 +66,27 @@ impl McpPool {
             let conn = match tokio::time::timeout(timeout, connect_one(sc)).await {
                 Ok(Ok(c)) => c,
                 Ok(Err(e)) => {
-                    tracing::warn!(server = %sc.name, "MCP connect failed: {e:#}; skipping");
+                    crate::sesslog::emit(
+                        crate::sesslog::Level::Warn,
+                        "mcp",
+                        serde_json::json!({
+                            "server": sc.name,
+                            "event": "connect_failed",
+                            "message": format!("{e:#}"),
+                        }),
+                    );
                     continue;
                 }
                 Err(_) => {
-                    tracing::warn!(server = %sc.name, "MCP connect/list_tools timed out; skipping");
+                    crate::sesslog::emit(
+                        crate::sesslog::Level::Warn,
+                        "mcp",
+                        serde_json::json!({
+                            "server": sc.name,
+                            "event": "timeout",
+                            "message": "MCP connect/list_tools timed out; skipping",
+                        }),
+                    );
                     continue;
                 }
             };
@@ -88,7 +104,11 @@ impl McpPool {
                     input_schema: schema,
                 });
             }
-            tracing::info!(server = %sc.name, tools = conn.tools.len(), "MCP server connected");
+            crate::sesslog::emit(
+                crate::sesslog::Level::Info,
+                "mcp",
+                serde_json::json!({"server": sc.name, "event": "connected", "tools": conn.tools.len()}),
+            );
             connections.push((sc.name.clone(), conn));
         }
 

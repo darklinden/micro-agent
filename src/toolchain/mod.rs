@@ -66,7 +66,11 @@ pub async fn run_tool(name: &str, args: &Value, ctx: &ToolCtx<'_>) -> ToolOutput
             .unwrap_or_default();
         let allowed = ctx.gate.check(cmd).await.unwrap_or(false);
         if !allowed {
-            tracing::info!(command = %cmd, "bash command refused by gate");
+            crate::sesslog::emit(
+                crate::sesslog::Level::Info,
+                "bash_refused",
+                serde_json::json!({"depth": ctx.depth, "command": cmd}),
+            );
             return ToolOutput {
                 content: "The bash command was refused by the safety gate. Adjust the command or \
                           find a safer tool-based alternative (e.g. read_file/write_file/edit_file)."

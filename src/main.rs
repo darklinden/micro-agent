@@ -2,20 +2,23 @@
 //!
 //! Three-mode workflow (plan → edit → run): `-p` explores and writes a
 //! numbered plan, `-e`+`-c` revises an existing one, and `-r` executes one by
-//! dispatching independent steps to sub-agents via the `task` tool.
+//! dispatching independent steps to sub-agents via the `task` tool. A previous
+//! run's session log can be replayed as conversation context via `--context`.
 
 mod config;
-mod logger;
 mod loop_;
 mod mcp;
 mod out;
 mod persona;
+mod sesslog;
 mod toolchain;
 mod types;
 mod upstream;
 
 use anyhow::Result;
 use clap::Parser;
+use serde_json::json;
+use sesslog::Level;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -48,6 +51,11 @@ struct Cli {
     /// (overrides MA_SYSTEM_PROMPT and the MA_SYSTEM_PREFIX/persona/SUFFIX composite).
     #[arg(short = 's', long = "system-prompt")]
     system_prompt: Option<String>,
+
+    /// Session log (.log) of a previous run whose top-level conversation is
+    /// replayed as context before this run's task (usable with -p/-e/-r).
+    #[arg(long = "context", value_name = "LOG")]
+    context: Option<PathBuf>,
 }
 
 /// Which of the three workflow modes this invocation runs.
@@ -178,12 +186,15 @@ fn main() {
     let loaded_env = load_env();
     let cli = Cli::parse();
 
-    // Config & logger
+    // Config & session log
     let cfg = match config::from_env() {
         Ok(c) => c,
         Err(e) => usage_error(&format!("invalid configuration: {e:#}")),
     };
-    let _guard = logger::init(cfg.log_dir.as_ref(), &cfg.log_level);
+    let _log_path = sesslog::init(cfg.log_dir.as_ref(), &cfg.log_level);
+    if let Some(p) = &_log_path {
+        out::banner(&format!("[log] {}", p.display()));
+    }
 
     // Startup banner: which `.env` files were actually loaded and the
     // upstream base URL in effect (never the API key).
@@ -197,12 +208,24 @@ fn main() {
             .join(", ")
     };
     out::banner(&format!("env: {env_desc} | upstream url: {}", cfg.url));
-    tracing::info!(env = %env_desc, url = %cfg.url, "startup");
 
     let mode = match resolve_mode(&cli) {
         Ok(m) => m,
         Err(e) => usage_error(&format!("{e:#}")),
     };
+    sesslog::emit(
+        Level::Info,
+        "run_start",
+        json!({
+            "mode": format!("{mode:?}").to_lowercase(),
+            "upstream": format!("{:?}", cfg.upstream_type).to_lowercase(),
+            "model": cfg.model,
+            "url": cfg.url,
+            "max_turns": cfg.max_turns,
+            "depth": 0u32,
+            "context": cli.context.as_ref().map(|p| p.display().to_string()),
+        }),
+    );
 
     let rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
@@ -213,7 +236,7 @@ fn main() {
         Ok(code) => code,
         Err(e) => {
             eprintln!("error: {e:#}");
-            tracing::error!(error = %e, "run failed");
+            sesslog::emit(Level::Error, "error", json!({"message": format!("{e:#}")}));
             2
         }
     };
@@ -231,6 +254,40 @@ async fn run(mut cfg: config::Config, cli: Cli, mode: Mode) -> Result<i32> {
         }
         return Ok(0);
     }
+
+    // `--context` replay: rebuild the previous run's top-level conversation
+    // from its session log and seed it as this run's starting history.
+    let context_seed = match cli.context.as_deref() {
+        None => Vec::new(),
+        Some(path) => {
+            let msgs = sesslog::load_messages(path).unwrap_or_else(|e| {
+                usage_error(&format!(
+                    "invalid --context {}: {e:#}\n\
+                     hint: pass a `.log` session file written by a previous ma run \
+                     (see MA_LOG_FILE_DIR)",
+                    path.display()
+                ))
+            });
+            if msgs.is_empty() {
+                usage_error(&format!(
+                    "--context {}: no top-level conversation found \
+                     (the log has no depth-0 `message` events)",
+                    path.display()
+                ));
+            }
+            out::banner(&format!(
+                "[context] {} ({} messages)",
+                path.display(),
+                msgs.len()
+            ));
+            sesslog::emit(
+                Level::Info,
+                "context_loaded",
+                json!({"depth": 0u32, "path": path.display().to_string(), "messages": msgs.len()}),
+            );
+            msgs
+        }
+    };
 
     // A shared record of this run's plan path, so Plan/Edit can print it after.
     let plan_state: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
@@ -295,6 +352,22 @@ async fn run(mut cfg: config::Config, cli: Cli, mode: Mode) -> Result<i32> {
     };
 
     let upstream = upstream::build(&cfg)?;
+
+    // Session-header events (written once per run): the system prompt, the
+    // full tool table, and this run's objective — everything the incremental
+    // `message` events later rely on for interpretation/replay.
+    sesslog::emit(
+        Level::Info,
+        "system",
+        json!({"depth": 0u32, "system_prompt": system}),
+    );
+    sesslog::emit(
+        Level::Info,
+        "tools",
+        json!({"tools": toolchain::build_tools(&mcp)}),
+    );
+    sesslog::emit(Level::Info, "objective", json!({"objective": objective}));
+
     let agent = loop_::Agent {
         cfg: &cfg,
         upstream: upstream.as_ref(),
@@ -304,6 +377,7 @@ async fn run(mut cfg: config::Config, cli: Cli, mode: Mode) -> Result<i32> {
         depth: 0,
         max_turns: cfg.max_turns,
         plan_path: Some(plan_state.clone()),
+        seed_messages: context_seed,
     };
 
     let outcome = agent.run().await?;
@@ -347,6 +421,7 @@ mod tests {
             run: run.map(String::from),
             list_tools: false,
             system_prompt: None,
+            context: None,
         }
     }
 

@@ -51,7 +51,10 @@ pub struct ThinkingBlock {
 }
 
 /// One message in the conversation history sent to the upstream API.
-#[derive(Debug, Clone)]
+///
+/// Serializable so the session log can persist each message as a JSONL
+/// `message` event and `--context` can replay them losslessly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
     pub blocks: Vec<ContentBlock>,
@@ -67,7 +70,7 @@ impl Message {
 }
 
 /// A tool definition exposed to the model.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDef {
     pub name: String,
     pub description: String,

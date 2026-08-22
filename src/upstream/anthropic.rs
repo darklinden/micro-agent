@@ -128,9 +128,6 @@ impl AnthropicClient {
     ) -> Result<StreamOutcome> {
         let body = self.build_body(system, messages, tools);
 
-        tracing::debug!(url = %self.url, model = %self.model, "anthropic request");
-        tracing::debug!(body = %body, "anthropic request body");
-
         let resp = self
             .client
             .post(&self.url)
@@ -154,7 +151,11 @@ impl AnthropicClient {
 
         super::sse::for_each_event(resp, |ev| {
             if ev.event.as_deref() == Some("error") {
-                tracing::error!(data = %ev.data, "anthropic SSE error event");
+                crate::sesslog::emit(
+                    crate::sesslog::Level::Error,
+                    "error",
+                    serde_json::json!({"message": "anthropic SSE error event", "data": ev.data}),
+                );
                 return;
             }
             let Ok(v) = serde_json::from_str::<Value>(&ev.data) else {
@@ -260,7 +261,15 @@ fn finalize_tool(acc: &mut Option<Accum>, out: &mut StreamOutcome) {
         }
         let parsed = serde_json::from_str(&a.partial_json).unwrap_or(Value::Null);
         if !parsed.is_object() {
-            tracing::debug!(name = %a.name, partial = %a.partial_json, "tool_use input not an object");
+            crate::sesslog::emit(
+                crate::sesslog::Level::Warn,
+                "warn",
+                serde_json::json!({
+                    "message": "tool_use input not an object; substituting {}",
+                    "tool": a.name,
+                    "partial": super::truncate(&a.partial_json, 500),
+                }),
+            );
         }
         out.tool_calls.push(ToolCall {
             id: a.id,

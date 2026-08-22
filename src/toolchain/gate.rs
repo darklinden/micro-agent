@@ -58,11 +58,26 @@ Respond with JSON only, no prose, in this exact shape:
         let verdict = parse_verdict(&outcome.assistant_text);
         match verdict {
             Some((allow, reason)) => {
-                tracing::info!(command = %command, allow, reason = %reason, "gate verdict");
+                // A denial is more interesting than an allowance: surface it
+                // at warn so a scan of the session log finds refusals fast.
+                let level = if allow { crate::sesslog::Level::Info } else { crate::sesslog::Level::Warn };
+                crate::sesslog::emit(
+                    level,
+                    "gate",
+                    serde_json::json!({"command": command, "allow": allow, "reason": reason}),
+                );
                 Ok(allow)
             }
             None => {
-                tracing::warn!(command = %command, "gate returned no parseable verdict; denying");
+                crate::sesslog::emit(
+                    crate::sesslog::Level::Warn,
+                    "gate",
+                    serde_json::json!({
+                        "command": command,
+                        "allow": false,
+                        "reason": "unparseable gate answer; denying (fail-safe)",
+                    }),
+                );
                 Ok(false)
             }
         }

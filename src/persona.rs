@@ -167,7 +167,7 @@ mod tests {
     fn cli_override_replaces_the_composite() {
         // `-s` value fully replaces prefix+persona+suffix and ignores MA_PERSONA.
         let cfg = test_cfg(Some("you are the BOX".into()));
-        let built = crate::persona::build_effective(&cfg, Some("you are the CLI".into())).unwrap();
+        let built = crate::persona::build_effective(&cfg, Some("you are the CLI")).unwrap();
         assert_eq!(built, "you are the CLI");
     }
 
@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(crate::persona::build_effective(&cfg, Some("")).unwrap(), "you are the ENV");
         // Non-empty `-s` beats MA_SYSTEM_PROMPT.
         assert_eq!(
-            crate::persona::build_effective(&cfg, Some("you are the CLI".into())).unwrap(),
+            crate::persona::build_effective(&cfg, Some("you are the CLI")).unwrap(),
             "you are the CLI"
         );
     }

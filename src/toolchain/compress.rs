@@ -59,12 +59,22 @@ Return ONLY the compressed output, no commentary."
     let outcome = match upstream.chat("", &[msg], &[], tx).await {
         Ok(o) => o,
         Err(e) => {
-            tracing::warn!(error = %e, "tool-result compression call failed; returning raw");
+            crate::sesslog::emit(
+                crate::sesslog::Level::Warn,
+                "compress",
+                serde_json::json!({
+                    "message": format!("tool-result compression call failed; returning raw: {e:#}"),
+                }),
+            );
             return raw.to_string();
         }
     };
     if outcome.assistant_text.trim().is_empty() {
-        tracing::warn!("tool-result compression returned empty; returning raw");
+        crate::sesslog::emit(
+            crate::sesslog::Level::Warn,
+            "compress",
+            serde_json::json!({"message": "tool-result compression returned empty; returning raw"}),
+        );
         return raw.to_string();
     }
     outcome.assistant_text

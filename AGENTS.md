@@ -38,6 +38,8 @@ cargo run -- -r .ma/plans/<ts>.md            # run; first turn defaults to `bash
 
 To exercise a real `task` dispatch under the mock in run mode, make the plan's first line start with `mock:run` (run mode's objective is the plan text, which the mock reads as the first user message).
 
+Note on `--context` + mock: the mock treats a request with any prior tool history (which seeded logs always contain) as "follow-up turn" and answers plainly, so `-e/-p … --context <real log>` ends with "no plan was submitted" — that is the mock's limitation, not a bug. To exercise edit/plan modes with `--context`, synthesize a tool-free seed log (two `message` events: user text starting with `mock:edit`, assistant plain text).
+
 - **Direct prompt, no plan file:** `cargo run -- -r "mock:run add a TODO parser"`. The
   prompt becomes the first user message, so the mock's `mock:run` substring match
   fires and it emits a `task` call.
@@ -59,7 +61,7 @@ The design centers on a **neutral core that every upstream client adapts to a wi
 
 - `persona.rs` — assembles the system prompt as `prefix + persona + suffix` (ADR-0005) and defines the mode prompt sections `MODE_PLAN/EDIT/RUN_INSTRUCTIONS`. `MA_SYSTEM_PREFIX`/`MA_SYSTEM_SUFFIX` may be a literal string **or a file path** (resolved to file contents if it exists — so pointing a suffix at a repo guidance file injects project context). `MA_PERSONA` replaces the built-in persona entirely.
 
-- `loop_.rs` — the agent turn loop. `Agent` carries `cfg`, `upstream`, `system`, `objective`, `mcp`, `depth` (0 = top level; >0 ⇒ quiet), `max_turns`, and an optional shared `plan_path` record. `Agent::run` builds the tool list + `ToolCtx` + `Gate`, then per turn streams the chat (to stdout only when `depth == 0`), records the assistant turn, executes tool calls and pushes results back as a user message, repeating until plain text (`Done`) or the turn budget (`MaxTurns`). It returns `RunOutcome { result, final_text, turns }`; keep the `result`→exit-code mapping intact (see below).
+- `loop_.rs` — the agent turn loop. `Agent` carries `cfg`, `upstream`, `system`, `objective`, `mcp`, `depth` (0 = top level; >0 ⇒ quiet), `max_turns`, an optional shared `plan_path` record, and `seed_messages` (`--context` replay; empty for fresh runs and sub-agents). `Agent::run` builds the tool list + `ToolCtx` + `Gate`, seeds the history with `seed_messages` + objective (logging every opening message as a `message` event), then per turn streams the chat (to stdout only when `depth == 0`), records the assistant turn, executes tool calls and pushes results back as a user message, repeating until plain text (`Done`) or the turn budget (`MaxTurns`). It returns `RunOutcome { result, final_text, turns }`; keep the `result`→exit-code mapping intact (see below).
 
 - `toolchain/` — tool registry + dispatch. `builtin.rs` holds the 9 built-ins (`read_file`,`write_file`,`edit_file`,`grep`,`glob`,`bash`,`plan`,`task`,`web_fetch`) as thin `serde_json::Value`-in/string-out functions. `plan` writes the plan to `.ma/plans/<ts>.md` atomically and prints it; `task` routes to `subagent::dispatch`. `gate.rs` is the bash safety check (`MA_GATE`, default on). `mod.rs::run_tool` is dispatch order: **deny-list → bash gate → MCP (`mcp:`-prefixed) → built-in**; `ToolCtx` carries `cfg`, `mcp`, `upstream`, `gate`, `depth`, and `plan_path`.
 
@@ -67,7 +69,9 @@ The design centers on a **neutral core that every upstream client adapts to a wi
 
 - `mcp/mod.rs` — MCP client pool (`rmcp` crate). `MA_MCP_SERVERS` is a JSON array; each entry is stdio (`cmd`/`args`/`env`) or SSE (`url`). On connect it lists tools and exposes them to the model as `mcp:<server>:<tool>` (namespacing avoids collisions, ADR-0004). A server that fails to connect or times out on `list_tools` is logged and skipped — the rest keep working.
 
-- `out.rs` vs `logger.rs` — strict stdout/log split. Stdout is the only user-facing channel (streamed model text + `⧗` tool marks via the mutex-guarded writer); full request/response/tool detail goes only to the per-launch file at `MA_LOG_FILE_DIR/<yyyyMMdd-HHmmss>.log` (via `tracing`).
+- `out.rs` vs `sesslog.rs` — strict stdout/log split. Stdout is the only user-facing channel (streamed model text + `[log]`/`[context]` banners via the mutex-guarded writer); the session log at `MA_LOG_FILE_DIR/<yyyyMMdd-HHmmss>.log` is a **strict JSONL** event stream written by `sesslog.rs`: session-header events (`run_start`/`system`/`tools`/`objective`) once at startup, then incremental events (`message`, `tool_call`, `tool_result_raw`, `gate`, `turn`, `subagent`, `plan_saved`, `request`, `run_end`) — never a full-request dump. `MA_LOG_LEVEL` is the write threshold; `sesslog::emit` is best-effort (logging failures never kill a run). `Message`/`ToolDef` are `Serialize`, so `message` events store the neutral types verbatim and `sesslog::load_messages` rebuilds them for replay (ADR-0007).
+
+- `--context <session.log>` — replay data flow: `main::run` loads the log via `sesslog::load_messages` (errors → exit 2 before any upstream call), prints `[context] <path> (<n> messages)`, and passes the messages as `Agent.seed_messages`; `loop_::Agent::run` seeds its history with them before appending the objective. The whole opening history is re-emitted as `message` events, so each new log carries the full lineage. Sub-agents always get an empty seed (`subagent.rs`).
 
 ### Safety model (no human approval — see README + ADR-0003)
 

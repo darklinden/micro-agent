@@ -153,9 +153,6 @@ impl OaiChatClient {
     ) -> Result<StreamOutcome> {
         let body = self.build_body(system, messages, tools);
 
-        tracing::debug!(url = %self.url, model = %self.model, "oai-chat request");
-        tracing::debug!(body = %body, "oai-chat request body");
-
         let resp = self
             .client
             .post(&self.url)

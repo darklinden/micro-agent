@@ -8,11 +8,13 @@
 use crate::config::Config;
 use crate::mcp::McpPool;
 use crate::out;
+use crate::sesslog::{self, Level};
 use crate::toolchain::compress;
 use crate::toolchain::gate::Gate;
 use crate::toolchain::{build_tools, run_tool, ToolCtx};
 use crate::types::{ContentBlock, Message, Role, StreamEvent, ToolDef};
 use crate::upstream::Upstream;
+use serde_json::json;
 
 /// How the run ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +48,9 @@ pub struct Agent<'a> {
     /// Shared record of this run's plan file path, so the caller (main) can
     /// print it after the run. `None` -> the run creates a fresh one (sub-agents).
     pub plan_path: Option<std::sync::Arc<std::sync::Mutex<Option<std::path::PathBuf>>>>,
+    /// Conversation replayed from a previous run's session log (`--context`);
+    /// pushed before this run's objective. Empty for fresh runs and sub-agents.
+    pub seed_messages: Vec<Message>,
 }
 
 impl<'a> Agent<'a> {
@@ -57,7 +62,17 @@ impl<'a> Agent<'a> {
     /// final text and turn count.
     pub async fn run(&self) -> anyhow::Result<RunOutcome> {
         let tools: Vec<ToolDef> = build_tools(self.mcp);
-        let mut messages = vec![Message::user_text(self.objective.clone())];
+        // `--context` replay: the seeded conversation comes first, then this
+        // run's objective as a fresh user turn.
+        let mut messages = self.seed_messages.clone();
+        messages.push(Message::user_text(self.objective.clone()));
+        // Log the whole opening history (seeded replay + objective) like any
+        // other message, so every session log carries its complete lineage and
+        // a later `--context` on THIS log sees the full chain, not just this
+        // run's turns.
+        for m in &messages {
+            sesslog::emit(Level::Info, "message", json!({"depth": self.depth, "msg": m}));
+        }
         let plan_path = self
             .plan_path
             .clone()
@@ -76,7 +91,11 @@ impl<'a> Agent<'a> {
         }
 
         for turn in 0..self.max_turns {
-            tracing::info!(turn, depth = self.depth, "turn start");
+            sesslog::emit(
+                Level::Info,
+                "turn",
+                json!({"depth": self.depth, "turn": turn, "status": "start"}),
+            );
 
             let (tx, mut rx): (tokio::sync::mpsc::UnboundedSender<StreamEvent>, _) =
                 tokio::sync::mpsc::unbounded_channel();
@@ -97,6 +116,22 @@ impl<'a> Agent<'a> {
             });
             let outcome = self.upstream.chat(&self.system, &messages, &tools, tx).await?;
             let _ = drain.await;
+
+            // Compact per-turn request summary (debug): sizes only — the full
+            // payload is already in the log as incremental message events.
+            if sesslog::enabled(Level::Debug) {
+                let bytes = serde_json::to_string(&messages).map(|s| s.len()).unwrap_or(0);
+                sesslog::emit(
+                    Level::Debug,
+                    "request",
+                    json!({
+                        "depth": self.depth,
+                        "turn": turn,
+                        "n_msgs": messages.len(),
+                        "bytes": bytes,
+                    }),
+                );
+            }
 
             // Record the assistant turn. Order matters for Anthropic replay:
             // the thinking block (with its handoff signature) precedes text and
@@ -124,13 +159,22 @@ impl<'a> Agent<'a> {
                 role: Role::Assistant,
                 blocks,
             });
+            sesslog::emit(
+                Level::Info,
+                "message",
+                json!({"depth": self.depth, "msg": messages.last().expect("just pushed")}),
+            );
 
             // Plain-text reply -> done.
             if outcome.tool_calls.is_empty() {
                 if !self.quiet() {
                     out::text("\n");
                 }
-                tracing::info!(turn, "agent finished (no tool calls)");
+                sesslog::emit(
+                    Level::Info,
+                    "run_end",
+                    json!({"depth": self.depth, "result": "done", "turns": turn as usize + 1}),
+                );
                 return Ok(RunOutcome {
                     result: RunResult::Done,
                     final_text: outcome.assistant_text.clone(),
@@ -144,12 +188,27 @@ impl<'a> Agent<'a> {
                 if !self.quiet() {
                     out::run_marker(turn, &c.name, &c.arguments);
                 }
+                sesslog::emit(
+                    Level::Info,
+                    "tool_call",
+                    json!({
+                        "depth": self.depth,
+                        "turn": turn,
+                        "id": c.id,
+                        "name": c.name,
+                        "input": c.arguments,
+                    }),
+                );
                 let r = run_tool(&c.name, &c.arguments, &ctx).await;
-                tracing::debug!(
-                    tool = %c.name,
-                    content = %crate::upstream::truncate(&r.content, 500),
-                    is_error = r.is_error,
-                    "tool result"
+                sesslog::emit(
+                    Level::Debug,
+                    "tool_result_raw",
+                    json!({
+                        "depth": self.depth,
+                        "id": c.id,
+                        "content": crate::upstream::truncate(&r.content, 500),
+                        "is_error": r.is_error,
+                    }),
                 );
                 let content = compress::prepare_tool_result(
                     self.upstream,
@@ -168,15 +227,28 @@ impl<'a> Agent<'a> {
                 role: Role::User,
                 blocks: result_blocks,
             });
+            sesslog::emit(
+                Level::Info,
+                "message",
+                json!({"depth": self.depth, "msg": messages.last().expect("just pushed")}),
+            );
 
-            tracing::info!(turns_processed = turn + 1, "turn complete");
+            sesslog::emit(
+                Level::Info,
+                "turn",
+                json!({"depth": self.depth, "turn": turn, "status": "complete"}),
+            );
         }
 
         if !self.quiet() {
             out::text("\n");
             out::banner("[reached turn limit; stopping]");
         }
-        tracing::warn!(max_turns = self.max_turns, "hit turn limit");
+        sesslog::emit(
+            Level::Warn,
+            "run_end",
+            json!({"depth": self.depth, "result": "max_turns", "turns": self.max_turns}),
+        );
         Ok(RunOutcome {
             result: RunResult::MaxTurns,
             final_text: String::new(),

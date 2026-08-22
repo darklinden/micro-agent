@@ -56,6 +56,10 @@ ma -e .ma/plans/20260821-093000.md -c "add a lint step"
 ma -r .ma/plans/20260821-093000.md
 ma -r "add a changelog section for the new flags"
 
+# Continue from a previous run: replay its session log as conversation
+# context before this run's task. Works with all three modes.
+ma -r .ma/plans/20260821-093000.md --context ma-logs/20260821-093005.log
+
 # Replace the entire system prompt (string or file path). Works in any mode;
 # mode instructions are still appended after it.
 ma -s "you are a code archaeologist" -r "map the dependency graph"
@@ -217,15 +221,42 @@ export MA_MCP_SERVERS='[
 - A server that fails to connect or times out is logged and skipped — the rest
   still work.
 
-### Logging
+### Logging — JSONL session logs
 
 | variable          | default | meaning                                                        |
 |-------------------|---------|----------------------------------------------------------------|
-| `MA_LOG_FILE_DIR` | —       | directory for per-launch log files (`<yyyymmdd-HHmmss>.log`); when unset, only stdout is used |
-| `MA_LOG_LEVEL`    | `info`  | tracing level for internal/file logging                        |
+| `MA_LOG_FILE_DIR` | —       | directory for per-launch session logs (`<yyyymmdd-HHmmss>.log`); when unset, nothing is written |
+| `MA_LOG_LEVEL`    | `info`  | write threshold: `debug` \| `info` \| `warn` \| `error`        |
 
-**stdout** shows only the model's streamed text + compact tool marks (`⧗ …`).
-All request/response/tool detail goes to the log file.
+Each run writes one **strict JSONL** file — one JSON object per line, every
+line carrying `v` / `ts` / `level` / `ev`. Session-level facts are written once
+at startup (`run_start`, `system`, `tools`, `objective`); everything after is
+incremental — `message` (each conversation turn), `tool_call`,
+`tool_result_raw`, `gate`, `turn`, `subagent`, `plan_saved`, `run_end`. There
+are no full-request dumps, so the file stays small and jq-friendly:
+
+```bash
+jq -r 'select(.ev=="message") | .msg.role' ma-logs/<ts>.log   # the conversation
+jq -c 'select(.ev=="gate")'                ma-logs/<ts>.log   # safety verdicts
+```
+
+**stdout** shows only the model's streamed text + compact tool marks (`⧗ …`),
+plus a `[log] <path>` banner at startup so the session log is easy to find.
+
+### Continuing from a previous run (`--context`)
+
+`--context <session.log>` replays a previous run's top-level conversation (its
+depth-0 `message` events) as this run's starting history, then appends the new
+task as a fresh user turn — like resuming a chat. It works with all three
+modes:
+
+- `-p "<task>" --context prev.log` — plan with the previous conversation in view;
+- `-e plan.md -c "<req>" --context prev.log` — revise a plan knowing what happened since;
+- `-r … --context prev.log` — continue a run that hit its turn budget.
+
+The replayed history is re-recorded into the *new* run's session log, so every
+log carries its complete lineage. A missing/unparseable/empty log exits with
+code 2 before any upstream request.
 
 ## Built-in tools
 

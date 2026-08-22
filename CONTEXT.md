@@ -18,7 +18,7 @@
 - `-p/--plan` 规划：只用读工具探索，用 `plan` 工具提交编号计划；打印计划全文与 `[plan] <路径>`。
 - `-e/--edit-plan` + `-c/--change` 修改：修订既有计划，写**新时间戳文件**（旧版保留成演进链），输出新路径。
 - `-r/--run` 执行：按计划逐步执行，独立步骤用 `task` 派发给子代理；`plan` 被冻结（禁用）。
-模式 = deny 叠加 + 模式提示词（`MODE_PLAN/EDIT/RUN_INSTRUCTIONS`）+ objective 构造；deny 只叠加不删除用户的 `MA_DENY_TOOLS`。
+三种模式均可叠加 `--context <log>`（见「上下文重放」）。模式 = deny 叠加 + 模式提示词（`MODE_PLAN/EDIT/RUN_INSTRUCTIONS`）+ objective 构造；deny 只叠加不删除用户的 `MA_DENY_TOOLS`。
 
 ## 工具
 
@@ -40,9 +40,17 @@
 
 Model Context Protocol 客户端，支持 **stdio**（子进程）与 **SSE**（远程）两种传输。MCP server 暴露的工具合并进 Agent 的工具列表，名称带 `mcp:<server>:<tool>` 前缀。_Avoid_: mcp server（此 agent 是 client，不是 server）。
 
+## 会话日志（SessionLog）
+
+`MA_LOG_FILE_DIR/<yyyyMMdd-HHmmss>.log`，每次运行一个**严格 JSONL** 文件：每行一个 JSON 对象，公共字段 `v`/`ts`/`level`/`ev`。session 级事实（`run_start`/`system`/`tools`/`objective`）只在启动写一次，此后只追加增量事件（`message`/`tool_call`/`tool_result_raw`/`gate`/`turn`/`subagent`/`plan_saved`/`request`/`run_end`），绝无整包请求转储。stdout 打 `[log] <路径>` 横幅指路。_Avoid_: tracing 全量 body dump, 多行 JSON, 双写混淆。
+
+## 上下文重放（Context replay）
+
+`--context <log>`（仅长形式）把上次运行的会话日志中 depth==0 的 `message` 事件反解为消息历史，作为本次的种子，再追加新的任务指令——类似续聊。三种模式通用；种子连同本轮对话会重新写入新日志，故每个日志都自含完整血统链。子代理（depth>0）的消息不参与重放。_Avoid_: resume（非会话恢复语义）、summary 注入（是完整重放而非摘要）、`-c`（已被 `--change` 占用）。
+
 ## stdout 与日志
 
-**stdout**：用户唯一看到的通道——模型的流式文本 + 精简工具标记（`⧗ …`）。**日志**：`MA_LOG_FILE_DIR/<yyyyMMdd-HHmmss>.log` 每次运行一个文件，记录全部请求/响应/工具细节，供审计调试。二者分离。_Avoid_: logging 双写混淆。
+**stdout**：用户唯一看到的通道——模型的流式文本 + 精简工具标记（`⧗ …`）。**会话日志**：见上，机器可解析的 JSONL 事件流，供审计调试与 `--context` 重放。二者分离。_Avoid_: logging 双写混淆。
 
 ## 系统提示词
 
@@ -58,5 +66,7 @@ Model Context Protocol 客户端，支持 **stdio**（子进程）与 **SSE**（
 - 输出 stdout/日志分离
 - 三段式工作流：`-p` plan / `-e -c` edit / `-r` run，顺序由 CLI 结构强制（0006）
 - 计划 `.ma/plans/<ts>.md`，edit 写新时间戳文件；`task` 派发子代理（深度 1）（0006）
+- 会话日志为严格 JSONL 事件流（session 头一次 + 增量追加），tracing 依赖移除（0007）
+- `--context <log>` 完整重放顶层对话为种子，日志自含血统链（0007）
 
 详见 `docs/adr/`。

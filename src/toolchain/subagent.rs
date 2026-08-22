@@ -50,6 +50,16 @@ pub async fn dispatch(args: &Value, ctx: &ToolCtx<'_>) -> ToolOutput {
         first_line(&task)
     ));
     let start = std::time::Instant::now();
+    crate::sesslog::emit(
+        crate::sesslog::Level::Info,
+        "subagent",
+        serde_json::json!({
+            "depth": ctx.depth + 1u32,
+            "event": "started",
+            "task": first_line(&task),
+            "max_turns": cfg.max_turns,
+        }),
+    );
     let agent = Agent {
         cfg: &cfg,
         upstream: ctx.upstream,
@@ -59,6 +69,7 @@ pub async fn dispatch(args: &Value, ctx: &ToolCtx<'_>) -> ToolOutput {
         depth: ctx.depth + 1,
         max_turns: cfg.max_turns,
         plan_path: None,
+        seed_messages: Vec::new(),
     };
     let elapsed = start.elapsed().as_secs_f64();
     // Box the recursive .run() future: Agent::run → run_tool → builtin::run →
@@ -76,6 +87,16 @@ pub async fn dispatch(args: &Value, ctx: &ToolCtx<'_>) -> ToolOutput {
                 },
                 o.turns,
             ));
+            crate::sesslog::emit(
+                crate::sesslog::Level::Info,
+                "subagent",
+                serde_json::json!({
+                    "depth": ctx.depth + 1u32,
+                    "event": if o.result == RunResult::Done { "finished" } else { "max_turns" },
+                    "turns": o.turns,
+                    "elapsed_s": elapsed,
+                }),
+            );
             match (o.result, o.final_text.trim().is_empty()) {
                 (RunResult::Done, false) => ok(o.final_text),
                 (RunResult::Done, true) => ok("(sub-agent finished without a textual report)".into()),
@@ -88,6 +109,16 @@ pub async fn dispatch(args: &Value, ctx: &ToolCtx<'_>) -> ToolOutput {
         }
         Err(e) => {
             crate::out::banner(&format!("[task] sub-agent failed after {elapsed:.1}s"));
+            crate::sesslog::emit(
+                crate::sesslog::Level::Error,
+                "subagent",
+                serde_json::json!({
+                    "depth": ctx.depth + 1u32,
+                    "event": "failed",
+                    "elapsed_s": elapsed,
+                    "message": format!("{e:#}"),
+                }),
+            );
             err(format!("sub-agent failed: {e:#}"))
         }
     }

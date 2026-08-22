@@ -56,6 +56,10 @@ ma -e .ma/plans/20260821-093000.md -c "add a lint step"
 ma -r .ma/plans/20260821-093000.md
 ma -r "add a changelog section for the new flags"
 
+# Replace the entire system prompt (string or file path). Works in any mode;
+# mode instructions are still appended after it.
+ma -s "you are a code archaeologist" -r "map the dependency graph"
+
 ma --list-tools        # list all available tools (incl. MCP) and exit
 ma --help
 ```
@@ -171,10 +175,20 @@ gate; `MA_DENY_TOOLS` still applies.
 
 ### System prompt
 
-Final system prompt = `MA_SYSTEM_PREFIX` + persona + `MA_SYSTEM_SUFFIX`.
+The base system prompt is resolved with this priority:
+
+1. `-s <value>` / `--system-prompt` (CLI) — replaces the prompt entirely
+2. `MA_SYSTEM_PROMPT` — replaces the prompt entirely when `-s` is absent
+3. default: `MA_SYSTEM_PREFIX` + persona + `MA_SYSTEM_SUFFIX`
+
+Every value — the `-s` flag, `MA_SYSTEM_PROMPT`, `MA_SYSTEM_PREFIX`, and
+`MA_SYSTEM_SUFFIX` — may be a literal string **or a file path** whose contents
+are inlined. The plan/edit/run mode instructions are always appended after the
+base prompt.
 
 | variable            | meaning                                                                          |
 |---------------------|----------------------------------------------------------------------------------|
+| `MA_SYSTEM_PROMPT`  | string **or file path** that **replaces** the whole prompt (below `-s`)         |
 | `MA_SYSTEM_PREFIX`  | string **or file path** prepended to the system prompt                          |
 | `MA_SYSTEM_SUFFIX`  | string **or file path** appended (point at a `CLAUDE.md` to inject repo context) |
 | `MA_PERSONA`        | when set, **replaces** the built-in persona                                      |

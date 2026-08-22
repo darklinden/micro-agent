@@ -43,6 +43,11 @@ struct Cli {
     /// List available tools and exit.
     #[arg(long = "list-tools")]
     list_tools: bool,
+
+    /// Replace the entire system prompt with this value or file path
+    /// (overrides MA_SYSTEM_PROMPT and the MA_SYSTEM_PREFIX/persona/SUFFIX composite).
+    #[arg(short = 's', long = "system-prompt")]
+    system_prompt: Option<String>,
 }
 
 /// Which of the three workflow modes this invocation runs.
@@ -233,7 +238,7 @@ async fn run(mut cfg: config::Config, cli: Cli, mode: Mode) -> Result<i32> {
     // The mode restricts which tools the model may call. Deny-list entries run
     // before every dispatch path (ordering invariant kept), and these overlays
     // only add to — never remove — the user's MA_DENY_TOOLS.
-    let base_system = persona::build(&cfg)?;
+    let base_system = persona::build_effective(&cfg, cli.system_prompt.as_deref())?;
     let (system, objective): (String, String) = match mode {
         Mode::Plan => {
             cfg.deny_tools.extend(
@@ -341,6 +346,7 @@ mod tests {
             change: change.map(String::from),
             run: run.map(String::from),
             list_tools: false,
+            system_prompt: None,
         }
     }
 

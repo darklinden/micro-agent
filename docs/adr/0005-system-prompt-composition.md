@@ -1,4 +1,4 @@
-# 0005 — System prompt is `[prefix] + persona + [suffix]`
+# 0005 — System prompt is `[prefix] + persona + [suffix]`, with a CLI/env override tier
 
 - Status: Accepted
 - Date: 2026-08-20
@@ -22,8 +22,14 @@ Final system prompt = `MA_SYSTEM_PREFIX` + persona + `MA_SYSTEM_SUFFIX`.
 - The default persona is distilled from Claude Code's identity sections (an
   autonomous agent that drives the tool loop), not a copy of its ~40 prompt
   sections.
+- A higher-override tier replaces the whole composite: `-s/--system-prompt`
+  (CLI) wins, then `MA_SYSTEM_PROMPT` (env), then the composite above. The
+  plan/edit/run mode instructions are still appended after whichever base is
+  chosen, so the workflow protocol survives a full swap.
 
 ## Consequences
 
 - Project context is opt-in and explicit, no hidden auto-discovery.
 - `MA_PERSONA` gives a clean override seam for custom agent personalities.
+- `-s` / `MA_SYSTEM_PROMPT` gives a whole-prompt override seam for users who
+  want to author the prompt outside the prefix/persona/suffix split.

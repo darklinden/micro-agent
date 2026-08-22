@@ -145,6 +145,7 @@ mod tests {
             system_prefix: None,
             system_suffix: None,
             persona: None,
+            system_prompt: None,
             log_dir: None,
             log_level: "info".into(),
         }

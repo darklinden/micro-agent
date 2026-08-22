@@ -114,6 +114,9 @@ pub struct Config {
     pub system_prefix: Option<String>,
     pub system_suffix: Option<String>,
     pub persona: Option<String>,
+    /// When set, REPLACES the whole prefix+persona+suffix composite
+    /// (`MA_SYSTEM_PROMPT`; string or file path).
+    pub system_prompt: Option<String>,
 
     // Logging
     pub log_dir: Option<PathBuf>,
@@ -219,6 +222,7 @@ pub fn from_env() -> Result<Config> {
         system_prefix: get_opt("MA_SYSTEM_PREFIX"),
         system_suffix: get_opt("MA_SYSTEM_SUFFIX"),
         persona: get_opt("MA_PERSONA"),
+        system_prompt: get_opt("MA_SYSTEM_PROMPT"),
         log_dir,
         log_level,
     })

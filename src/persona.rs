@@ -5,6 +5,11 @@
 //! `CLAUDE.md` thus injects project context). `MA_PERSONA` — when set —
 //! *replaces* the built-in persona entirely; otherwise the built-in default is
 //! used.
+//!
+//! Override priority ([`build_effective`]): a CLI `-s/--system-prompt` value
+//! wins, then the `MA_SYSTEM_PROMPT` environment variable; both replace the
+//! whole composite above. With neither set, the prefix+persona+suffix composite
+//! is used unchanged.
 
 use anyhow::Result;
 use std::path::Path;
@@ -82,6 +87,22 @@ pub fn build(cfg: &crate::config::Config) -> Result<String> {
     Ok(parts.join("\n\n"))
 }
 
+/// Build the effective base system prompt for a run.
+///
+/// Priority: a CLI `-s/--system-prompt` value wins, then the `MA_SYSTEM_PROMPT`
+/// environment variable — both *replace* the entire prompt (an empty string is
+/// treated as unset). With neither, fall back to the
+/// `[prefix] + persona + [suffix]` composite via [`build`].
+pub fn build_effective(cfg: &crate::config::Config, cli_override: Option<&str>) -> Result<String> {
+    if let Some(p) = cli_override
+        .filter(|s| !s.is_empty())
+        .or(cfg.system_prompt.as_deref())
+    {
+        return resolve(p); // full replacement (string or file path)
+    }
+    build(cfg)
+}
+
 #[cfg(test)]
 mod tests {
     use super::resolve;
@@ -120,6 +141,7 @@ mod tests {
             system_prefix: Some("PREFIX".into()),
             system_suffix: Some("SUFFIX".into()),
             persona,
+            system_prompt: None,
             log_dir: None,
             log_level: "info".into(),
         }
@@ -139,6 +161,43 @@ mod tests {
         let built = crate::persona::build(&test_cfg(Some("you are the BOX".into()))).unwrap();
         assert!(!built.contains("lightweight autonomous CLI agent"));
         assert!(built.contains("you are the BOX"));
+    }
+
+    #[test]
+    fn cli_override_replaces_the_composite() {
+        // `-s` value fully replaces prefix+persona+suffix and ignores MA_PERSONA.
+        let cfg = test_cfg(Some("you are the BOX".into()));
+        let built = crate::persona::build_effective(&cfg, Some("you are the CLI".into())).unwrap();
+        assert_eq!(built, "you are the CLI");
+    }
+
+    #[test]
+    fn env_override_replaces_the_composite() {
+        // MA_SYSTEM_PROMPT (cfg.system_prompt) replaces the composite when `-s` is absent.
+        let mut cfg = test_cfg(None);
+        cfg.system_prompt = Some("you are the ENV".into());
+        let built = crate::persona::build_effective(&cfg, None).unwrap();
+        assert_eq!(built, "you are the ENV");
+    }
+
+    #[test]
+    fn cli_wins_over_env_and_empty_cli_is_unset() {
+        let mut cfg = test_cfg(None);
+        cfg.system_prompt = Some("you are the ENV".into());
+        // Empty `-s` treated as unset → env tier applies.
+        assert_eq!(crate::persona::build_effective(&cfg, Some("")).unwrap(), "you are the ENV");
+        // Non-empty `-s` beats MA_SYSTEM_PROMPT.
+        assert_eq!(
+            crate::persona::build_effective(&cfg, Some("you are the CLI".into())).unwrap(),
+            "you are the CLI"
+        );
+    }
+
+    #[test]
+    fn no_override_uses_composite() {
+        let built = crate::persona::build_effective(&test_cfg(None), None).unwrap();
+        assert!(built.starts_with("PREFIX"));
+        assert!(built.ends_with("SUFFIX"));
     }
 
     #[test]

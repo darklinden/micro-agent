@@ -1,4 +1,4 @@
-//! OpenAI Chat Completions upstream client (`MA_UPSTREAM_TYPE=oai-chat`).
+//! OpenAI Chat Completions upstream client (`upstream_type = "oai-chat"`).
 //!
 //! Also covers DeepSeek / Ollama / vLLM and other OpenAI-compatible endpoints.
 
@@ -16,8 +16,8 @@ pub struct OaiChatClient {
     api_key: String,
     model: String,
     max_tokens: usize,
-    /// OpenAI `reasoning_effort` from `MA_THINKING_EFFORT`; `None` omits it.
-    reasoning_effort: Option<&'static str>,
+    /// OpenAI `reasoning_effort` from `[reasoning]` config; `None` omits it.
+    reasoning_effort: Option<String>,
     client: reqwest::Client,
 }
 
@@ -34,7 +34,7 @@ impl OaiChatClient {
             api_key: cfg.api_key.clone(),
             model: cfg.model.clone(),
             max_tokens: cfg.max_tokens,
-            reasoning_effort: cfg.thinking_effort.as_audience_effort(),
+            reasoning_effort: cfg.reasoning.audience_effort().map(str::to_string),
             client,
         }
     }
@@ -53,7 +53,7 @@ impl OaiChatClient {
             "max_tokens": self.max_tokens,
             "messages": wire,
         });
-        if let Some(effort) = self.reasoning_effort {
+        if let Some(effort) = &self.reasoning_effort {
             body["reasoning_effort"] = json!(effort);
         }
         if !tools.is_empty() {
@@ -314,9 +314,9 @@ mod tests {
         }
     }
 
-    fn client_with_effort(effort: &'static str) -> OaiChatClient {
+    fn client_with_effort(effort: &str) -> OaiChatClient {
         OaiChatClient {
-            reasoning_effort: Some(effort),
+            reasoning_effort: Some(effort.to_string()),
             ..client()
         }
     }

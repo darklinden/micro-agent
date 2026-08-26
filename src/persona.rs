@@ -1,15 +1,14 @@
 //! System prompt assembly: `[prefix] + persona + [suffix]`.
 //!
-//! `MA_SYSTEM_PREFIX` / `MA_SYSTEM_SUFFIX` may be either a literal string or a
-//! path to a file whose contents are inlined (pointing a suffix at a
-//! `CLAUDE.md` thus injects project context). `MA_PERSONA` — when set —
-//! *replaces* the built-in persona entirely; otherwise the built-in default is
-//! used.
+//! `system_prefix` / `system_suffix` may be either a literal string or a path
+//! to a file whose contents are inlined (pointing a suffix at a `CLAUDE.md`
+//! thus injects project context). `persona` — when set — *replaces* the
+//! built-in persona entirely; otherwise the built-in default is used.
 //!
 //! Override priority ([`build_effective`]): a CLI `-s/--system-prompt` value
-//! wins, then the `MA_SYSTEM_PROMPT` environment variable; both replace the
-//! whole composite above. With neither set, the prefix+persona+suffix composite
-//! is used unchanged.
+//! wins, then the `system_prompt` config key; both replace the whole composite
+//! above. With neither set, the prefix+persona+suffix composite is used
+//! unchanged.
 
 use anyhow::Result;
 use std::path::Path;
@@ -89,9 +88,9 @@ pub fn build(cfg: &crate::config::Config) -> Result<String> {
 
 /// Build the effective base system prompt for a run.
 ///
-/// Priority: a CLI `-s/--system-prompt` value wins, then the `MA_SYSTEM_PROMPT`
-/// environment variable — both *replace* the entire prompt (an empty string is
-/// treated as unset). With neither, fall back to the
+/// Priority: a CLI `-s/--system-prompt` value wins, then the `system_prompt`
+/// config key — both *replace* the entire prompt (an empty string is treated
+/// as unset). With neither, fall back to the
 /// `[prefix] + persona + [suffix]` composite via [`build`].
 pub fn build_effective(cfg: &crate::config::Config, cli_override: Option<&str>) -> Result<String> {
     if let Some(p) = cli_override
@@ -129,7 +128,10 @@ mod tests {
             api_key: "k".into(),
             model: "m".into(),
             max_tokens: 100,
-            thinking_effort: crate::config::ThinkingEffort::None,
+            reasoning: crate::config::ReasoningPolicy {
+                thinking_enabled: false,
+                effort: crate::config::ReasoningEffortOverride::Drop,
+            },
             extra_headers: vec![],
             max_turns: 5,
             task_max_turns: None,
@@ -165,28 +167,31 @@ mod tests {
 
     #[test]
     fn cli_override_replaces_the_composite() {
-        // `-s` value fully replaces prefix+persona+suffix and ignores MA_PERSONA.
+        // `-s` value fully replaces prefix+persona+suffix and ignores persona.
         let cfg = test_cfg(Some("you are the BOX".into()));
         let built = crate::persona::build_effective(&cfg, Some("you are the CLI")).unwrap();
         assert_eq!(built, "you are the CLI");
     }
 
     #[test]
-    fn env_override_replaces_the_composite() {
-        // MA_SYSTEM_PROMPT (cfg.system_prompt) replaces the composite when `-s` is absent.
+    fn config_override_replaces_the_composite() {
+        // system_prompt (cfg) replaces the composite when `-s` is absent.
         let mut cfg = test_cfg(None);
-        cfg.system_prompt = Some("you are the ENV".into());
+        cfg.system_prompt = Some("you are the CONFIG".into());
         let built = crate::persona::build_effective(&cfg, None).unwrap();
-        assert_eq!(built, "you are the ENV");
+        assert_eq!(built, "you are the CONFIG");
     }
 
     #[test]
-    fn cli_wins_over_env_and_empty_cli_is_unset() {
+    fn cli_wins_over_config_and_empty_cli_is_unset() {
         let mut cfg = test_cfg(None);
-        cfg.system_prompt = Some("you are the ENV".into());
-        // Empty `-s` treated as unset → env tier applies.
-        assert_eq!(crate::persona::build_effective(&cfg, Some("")).unwrap(), "you are the ENV");
-        // Non-empty `-s` beats MA_SYSTEM_PROMPT.
+        cfg.system_prompt = Some("you are the CONFIG".into());
+        // Empty `-s` treated as unset → config tier applies.
+        assert_eq!(
+            crate::persona::build_effective(&cfg, Some("")).unwrap(),
+            "you are the CONFIG"
+        );
+        // Non-empty `-s` beats system_prompt.
         assert_eq!(
             crate::persona::build_effective(&cfg, Some("you are the CLI")).unwrap(),
             "you are the CLI"

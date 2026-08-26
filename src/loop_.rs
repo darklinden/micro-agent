@@ -43,7 +43,7 @@ pub struct Agent<'a> {
     /// dispatch. Depth > 0 implies quiet (no stdout output).
     pub depth: u32,
     /// Turn budget for THIS loop (top level: cfg.max_turns; sub-agents:
-    /// MA_TASK_MAX_TURNS or inherited).
+    /// task_max_turns or inherited).
     pub max_turns: usize,
     /// Shared record of this run's plan file path, so the caller (main) can
     /// print it after the run. `None` -> the run creates a fresh one (sub-agents).

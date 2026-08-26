@@ -1,6 +1,6 @@
 //! LLM safety gate for command execution.
 //!
-//! Before a `bash` command runs (when `MA_GATE` is on), a *separate* LLM call
+//! Before a `bash` command runs (when `gate = true`), a *separate* LLM call
 //! asks a judge model whether the command serves the current task and is not
 //! destructive. Any failure — network error, unparseable answer, or an
 //! explicit refusal — defaults to a denial (fail-safe).

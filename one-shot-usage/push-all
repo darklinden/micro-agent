@@ -1,0 +1,51 @@
+#!/usr/bin/env zsh
+
+BASEDIR=$(dirname "$0")
+SCRIPT_DIR="$(realpath "$BASEDIR")"
+
+WORKDIR="$PWD"
+GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$WORKDIR")"
+
+echo "=== push-all in $GIT_ROOT ==="
+
+# Collect submodule paths
+submodules=()
+if [ -f "$GIT_ROOT/.gitmodules" ]; then
+    while IFS= read -r line; do
+        sub_path=$(echo "$line" | awk '{ print $2 }')
+        submodules+=("$sub_path")
+    done < <(git -C "$GIT_ROOT" config --file .gitmodules --get-regexp path)
+fi
+
+# Process submodules: commit if dirty, push if clean
+for sub in "${submodules[@]}"; do
+    echo ""
+    echo "--- submodule: $sub ---"
+    cd "$GIT_ROOT/$sub" || continue
+
+    if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+        echo "Clean, pushing ..."
+        git push
+    else
+        echo "Dirty, committing ..."
+        commit
+        git push
+    fi
+done
+
+# Process workdir repo itself
+echo ""
+echo "--- workdir: $GIT_ROOT ---"
+cd "$GIT_ROOT"
+
+if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+    echo "Clean, pushing ..."
+    git push
+else
+    echo "Dirty, committing ..."
+    commit
+    git push
+fi
+
+echo ""
+echo "=== push-all done ==="

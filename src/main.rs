@@ -22,7 +22,7 @@ use sesslog::Level;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// Lightweight autonomous CLI agent, driven entirely by environment variables.
+/// Lightweight autonomous CLI agent, configured via `~/.ma/config.toml`.
 #[derive(Parser, Debug)]
 #[command(name = "ma", version, about, disable_help_subcommand = true)]
 struct Cli {
@@ -47,8 +47,12 @@ struct Cli {
     #[arg(long = "list-tools")]
     list_tools: bool,
 
+    /// Config file to load instead of the default ~/.ma/config.toml.
+    #[arg(long = "config", value_name = "FILE")]
+    config: Option<PathBuf>,
+
     /// Replace the entire system prompt with this value or file path
-    /// (overrides MA_SYSTEM_PROMPT and the MA_SYSTEM_PREFIX/persona/SUFFIX composite).
+    /// (overrides system_prompt and the system_prefix/persona/suffix composite).
     #[arg(short = 's', long = "system-prompt")]
     system_prompt: Option<String>,
 
@@ -150,44 +154,19 @@ fn usage_error(msg: &str) -> ! {
     std::process::exit(2);
 }
 
-/// Load `.env` files (exe-dir first, then crate root in debug builds; shell
-/// vars always win, exe-dir takes precedence). Returns the paths of the files
-/// that actually existed and were loaded.
-fn load_env() -> Vec<PathBuf> {
-    let mut loaded = Vec::new();
-    // Load the executable-dir `.env` first so it takes precedence over the
-    // crate root: `dotenvy::from_path` never overrides an already-set
-    // variable, so whichever file loads first wins.
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        let p = dir.join(".env");
-        if load_from(&p) {
-            loaded.push(p);
-        }
-    }
-    if cfg!(debug_assertions) {
-        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join(".env");
-        if load_from(&p) {
-            loaded.push(p);
-        }
-    }
-    loaded
-}
-
-/// Load a single `.env` file without overriding already-set variables.
-/// Returns whether the file existed and was loaded. Missing/unreadable is not
-/// fatal (returns `false`).
-fn load_from(path: &Path) -> bool {
-    dotenvy::from_path(path).is_ok()
-}
-
 fn main() {
-    let loaded_env = load_env();
     let cli = Cli::parse();
 
-    // Config & session log
-    let cfg = match config::from_env() {
+    // Config & session log. The config path is `--config FILE` or, by default,
+    // `$HOME/.ma/config.toml` (ADR-0008).
+    let config_path = match cli.config.clone() {
+        Some(p) => p,
+        None => match config::default_path() {
+            Ok(p) => p,
+            Err(e) => usage_error(&format!("invalid configuration: {e:#}")),
+        },
+    };
+    let cfg = match config::load(&config_path) {
         Ok(c) => c,
         Err(e) => usage_error(&format!("invalid configuration: {e:#}")),
     };
@@ -196,18 +175,13 @@ fn main() {
         out::banner(&format!("[log] {}", p.display()));
     }
 
-    // Startup banner: which `.env` files were actually loaded and the
-    // upstream base URL in effect (never the API key).
-    let env_desc = if loaded_env.is_empty() {
-        "(none)".to_string()
-    } else {
-        loaded_env
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    out::banner(&format!("env: {env_desc} | upstream url: {}", cfg.url));
+    // Startup banner: which config file is in effect and the upstream base
+    // URL (never the API key).
+    out::banner(&format!(
+        "config: {} | upstream url: {}",
+        config_path.display(),
+        cfg.url
+    ));
 
     let mode = match resolve_mode(&cli) {
         Ok(m) => m,
@@ -222,6 +196,7 @@ fn main() {
             "model": cfg.model,
             "url": cfg.url,
             "max_turns": cfg.max_turns,
+            "config": config_path.display().to_string(),
             "depth": 0u32,
             "context": cli.context.as_ref().map(|p| p.display().to_string()),
         }),
@@ -264,7 +239,7 @@ async fn run(mut cfg: config::Config, cli: Cli, mode: Mode) -> Result<i32> {
                 usage_error(&format!(
                     "invalid --context {}: {e:#}\n\
                      hint: pass a `.log` session file written by a previous ma run \
-                     (see MA_LOG_FILE_DIR)",
+                     (see log_file_dir)",
                     path.display()
                 ))
             });
@@ -294,7 +269,7 @@ async fn run(mut cfg: config::Config, cli: Cli, mode: Mode) -> Result<i32> {
 
     // The mode restricts which tools the model may call. Deny-list entries run
     // before every dispatch path (ordering invariant kept), and these overlays
-    // only add to — never remove — the user's MA_DENY_TOOLS.
+    // only add to — never remove — the user's deny_tools.
     let base_system = persona::build_effective(&cfg, cli.system_prompt.as_deref())?;
     let (system, objective): (String, String) = match mode {
         Mode::Plan => {
@@ -420,6 +395,7 @@ mod tests {
             change: change.map(String::from),
             run: run.map(String::from),
             list_tools: false,
+            config: None,
             system_prompt: None,
             context: None,
         }

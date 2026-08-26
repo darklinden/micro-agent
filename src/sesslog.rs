@@ -1,6 +1,6 @@
 //! Session log: a strict JSONL event file per launch.
 //!
-//! `<MA_LOG_FILE_DIR>/<yyyyMMdd-HHmmss>.log` holds one JSON object per line.
+//! `<log_file_dir>/<yyyyMMdd-HHmmss>.log` holds one JSON object per line.
 //! Session-level facts (system prompt, tool table) are written once at startup
 //! (`run_start`/`system`/`tools`); every later record is an incremental event
 //! (`message`, `tool_call`, `gate`, …) — never a full re-dump — so the file
@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Severity of a log record; also the write threshold configured by
-/// `MA_LOG_LEVEL`. Ordered so `Debug < Info < Warn < Error`.
+/// `log_level`. Ordered so `Debug < Info < Warn < Error`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
     Debug,
@@ -36,7 +36,7 @@ impl Level {
         }
     }
 
-    /// Parse `MA_LOG_LEVEL`; unknown values fall back to `Info`.
+    /// Parse `log_level`; unknown values fall back to `Info`.
     fn parse(s: &str) -> Self {
         match s.to_ascii_lowercase().as_str() {
             "debug" | "trace" => Level::Debug,
@@ -89,7 +89,7 @@ impl SessionLog {
 }
 
 /// The process-wide session log; `None` until `init` succeeds and stays `None`
-/// when no `MA_LOG_FILE_DIR` is configured (emit then becomes a no-op).
+/// when no `log_file_dir` is configured (emit then becomes a no-op).
 static LOG: Mutex<Option<SessionLog>> = Mutex::new(None);
 
 /// Local timestamp matching plan-file naming: `yyyymmdd-hhmmss`.

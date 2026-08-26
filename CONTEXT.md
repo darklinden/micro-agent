@@ -1,16 +1,16 @@
 # ma — Domain Context
 
-`ma` 是一个微型 CLI agent（无 TUI），复用 `ai-bridge` 的上游约定（统一纳入 `MA_*` 命名空间）作为 `MA_*` agent 行为约定。以下是领域术语表（不含实现细节）。
+`ma` 是一个微型 CLI agent（无 TUI），配置收敛在单一 TOML 文件 `~/.ma/config.toml`（可用 `--config` 换文件；ADR-0008），复用 `ai-bridge` 的上游与 `[reasoning]` 约定。以下是领域术语表（不含实现细节）。
 
 ## Upstream
 
-代理实际请求的 AI 模型 API，由 `MA_UPSTREAM_TYPE` 显式声明。目前支持 `anthropic-messages`（Anthropic Messages 协议）与 `oai-chat`（OpenAI Chat Completions / 兼容端点）二者之一。_Avoid_: 上游, backend, provider, upstream type detection 的 URL 启发式。
+代理实际请求的 AI 模型 API，由 `upstream_type` 显式声明。目前支持 `anthropic-messages`（Anthropic Messages 协议）与 `oai-chat`（OpenAI Chat Completions / 兼容端点）二者之一。_Avoid_: 上游, backend, provider, upstream type detection 的 URL 启发式。
 
-统一命名：`MA_UPSTREAM_TYPE` / `MA_UPSTREAM_URL` / `MA_UPSTREAM_API_KEY` / `MA_UPSTREAM_MODEL`。上游格式是显式声明的，绝不通过 URL 猜（避免把 `anthropic.com/v1/messages` 误判为 chat）。
+统一命名：`upstream_type` / `url` / `api_key` / `model`（config.toml 键）。上游格式是显式声明的，绝不通过 URL 猜（避免把 `anthropic.com/v1/messages` 误判为 chat）。
 
 ## Agent
 
-`ma` 的主循环：把对话发给 Upstream，**流式**把模型文本打到 stdout，执行模型请求的工具调用并把结果回喂，直到模型给出纯文本答复或撞到回合预算 `MA_MAX_TURNS`。_Avoid_: chatbot, repl, interactive.
+`ma` 的主循环：把对话发给 Upstream，**流式**把模型文本打到 stdout，执行模型请求的工具调用并把结果回喂，直到模型给出纯文本答复或撞到回合预算 `max_turns`。_Avoid_: chatbot, repl, interactive.
 
 ## 工作流（Workflow）
 
@@ -18,7 +18,7 @@
 - `-p/--plan` 规划：只用读工具探索，用 `plan` 工具提交编号计划；打印计划全文与 `[plan] <路径>`。
 - `-e/--edit-plan` + `-c/--change` 修改：修订既有计划，写**新时间戳文件**（旧版保留成演进链），输出新路径。
 - `-r/--run` 执行：按计划逐步执行，独立步骤用 `task` 派发给子代理；`plan` 被冻结（禁用）。
-三种模式均可叠加 `--context <log>`（见「上下文重放」）。模式 = deny 叠加 + 模式提示词（`MODE_PLAN/EDIT/RUN_INSTRUCTIONS`）+ objective 构造；deny 只叠加不删除用户的 `MA_DENY_TOOLS`。
+三种模式均可叠加 `--context <log>`（见「上下文重放」）。模式 = deny 叠加 + 模式提示词（`MODE_PLAN/EDIT/RUN_INSTRUCTIONS`）+ objective 构造；deny 只叠加不删除用户的 `deny_tools`。
 
 ## 工具
 
@@ -26,7 +26,7 @@
 
 ## 子代理（Sub-agent）
 
-由 `task` 派发的嵌套 `Agent` 运行，深度上限 1；看不到父对话，最终消息即报告；stdout 静默（仅 `[task] started/finished` 横幅），细节进日志（`depth` 字段）；回合预算 `MA_TASK_MAX_TURNS`（缺省继承 `MA_MAX_TURNS`）。_Avoid_: process, thread, spawn（非操作系统进程）、plan mode、approval.
+由 `task` 派发的嵌套 `Agent` 运行，深度上限 1；看不到父对话，最终消息即报告；stdout 静默（仅 `[task] started/finished` 横幅），细节进日志（`depth` 字段）；回合预算 `task_max_turns`（缺省继承 `max_turns`）。_Avoid_: process, thread, spawn（非操作系统进程）、plan mode、approval.
 
 ## 计划文件（Plan file）
 
@@ -34,7 +34,7 @@
 
 ## 安全闸门（Gate）
 
-只有 `bash` 类命令在真正执行前，会另起一次 LLM 请求，让模型结合「当前任务语境 + 命令」判定是否执行、危害多大；任何失败默认**拒绝**。`MA_GATE=0` 关闭。_Avoid_: approval, permission, trust dialog（此 agent 无人工确认/信任流程）。
+只有 `bash` 类命令在真正执行前，会另起一次 LLM 请求，让模型结合「当前任务语境 + 命令」判定是否执行、危害多大；任何失败默认**拒绝**。`gate = false` 关闭。_Avoid_: approval, permission, trust dialog（此 agent 无人工确认/信任流程）。
 
 ## MCP
 
@@ -42,7 +42,7 @@ Model Context Protocol 客户端，支持 **stdio**（子进程）与 **SSE**（
 
 ## 会话日志（SessionLog）
 
-`MA_LOG_FILE_DIR/<yyyyMMdd-HHmmss>.log`，每次运行一个**严格 JSONL** 文件：每行一个 JSON 对象，公共字段 `v`/`ts`/`level`/`ev`。session 级事实（`run_start`/`system`/`tools`/`objective`）只在启动写一次，此后只追加增量事件（`message`/`tool_call`/`tool_result_raw`/`gate`/`turn`/`subagent`/`plan_saved`/`request`/`run_end`），绝无整包请求转储。stdout 打 `[log] <路径>` 横幅指路。_Avoid_: tracing 全量 body dump, 多行 JSON, 双写混淆。
+`log_file_dir/<yyyyMMdd-HHmmss>.log`，每次运行一个**严格 JSONL** 文件：每行一个 JSON 对象，公共字段 `v`/`ts`/`level`/`ev`。session 级事实（`run_start`/`system`/`tools`/`objective`）只在启动写一次，此后只追加增量事件（`message`/`tool_call`/`tool_result_raw`/`gate`/`turn`/`subagent`/`plan_saved`/`request`/`run_end`），绝无整包请求转储。stdout 打 `[log] <路径>` 横幅指路。_Avoid_: tracing 全量 body dump, 多行 JSON, 双写混淆。
 
 ## 上下文重放（Context replay）
 
@@ -54,11 +54,17 @@ Model Context Protocol 客户端，支持 **stdio**（子进程）与 **SSE**（
 
 ## 系统提示词
 
-构造顺序 `[MA_SYSTEM_PREFIX] + persona + [MA_SYSTEM_SUFFIX]`。prefix / suffix 可以是字面字符串**或文件路径**（指向 `CLAUDE.md` 即注入工程上下文）。`MA_PERSONA` 设置时**整体替换**内置 persona，否则用内置默认。
+构造顺序 `[system_prefix] + persona + [system_suffix]`。prefix / suffix 可以是字面字符串**或文件路径**（指向 `CLAUDE.md` 即注入工程上下文）。`persona` 设置时**整体替换**内置 persona，否则用内置默认；`system_prompt` 或 CLI `-s` 则替换整个组合。
+
+## 配置文件（Config）
+
+单一 TOML 文件 `~/.ma/config.toml`（ADR-0008）：必填 `upstream_type`/`url`/`api_key`，其余可选带默认；未知键启动即报错（typo 安全）；文件缺失时自动落全注释 starter 模板再报 missing field。`--config <file>` 手动切换多套配置。推理策略用 ai-bridge 的 `[reasoning]` 双键：`thinking` 总开关 + `effort`（off/drop/none/disable/disabled = 不发字段，其余值小写透传）。_Avoid_: env vars、`.env` 加载（已移除，仅 `$HOME` 用于定位配置）、profile 自动记录。
 
 ## 决策（Decision）索引
 
-- 上游格式显式声明（`MA_UPSTREAM_TYPE` 必填，不猜 URL）
+- 上游格式显式声明（`upstream_type` 必填，不猜 URL）
+- 配置收敛于 `~/.ma/config.toml` 单文件：deny_unknown_fields + starter 模板 + `--config` 覆盖；env 与 `.env` 全部移除（0008）
+- 推理参数走 `[reasoning]` 双键（thinking 总开关 / effort 透传，对齐 ai-bridge；anthropic 已知档位映射 budget_tokens）
 - Agent 纯 auto、无人工确认 / 无信任 / 无权限弹窗
 - 内置工具仅命令类过安全闸门
 - MCP 工具统一 `mcp:` 前缀

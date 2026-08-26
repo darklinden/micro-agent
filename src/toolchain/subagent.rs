@@ -40,7 +40,7 @@ pub async fn dispatch(args: &Value, ctx: &ToolCtx<'_>) -> ToolOutput {
     let context = crate::upstream::truncate(arg(args, "context").trim(), 16 * 1024);
     let objective = build_objective(&task, &context);
 
-    // 3. Scoped budget: MA_TASK_MAX_TURNS or inherited MA_MAX_TURNS.
+    // 3. Scoped budget: task_max_turns or inherited max_turns.
     let mut cfg = ctx.cfg.clone();
     cfg.max_turns = cfg.task_max_turns.unwrap_or(cfg.max_turns);
 
@@ -146,7 +146,7 @@ fn first_line(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{build_objective, dispatch};
-    use crate::config::{Config, ThinkingEffort, UpstreamType};
+    use crate::config::{Config, ReasoningEffortOverride, ReasoningPolicy, UpstreamType};
     use crate::mcp::McpPool;
     use crate::toolchain::gate::Gate;
     use crate::toolchain::ToolCtx;
@@ -164,7 +164,10 @@ mod tests {
             api_key: "k".into(),
             model: "m".into(),
             max_tokens: 100,
-            thinking_effort: ThinkingEffort::None,
+            reasoning: ReasoningPolicy {
+                thinking_enabled: false,
+                effort: ReasoningEffortOverride::Drop,
+            },
             extra_headers: vec![],
             max_turns,
             task_max_turns: None,

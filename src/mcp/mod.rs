@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// One configured MCP server (from `MA_MCP_SERVERS`, a JSON array).
+/// One configured MCP server (a `[[mcp_servers]]` table in the config file).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
     pub name: String,

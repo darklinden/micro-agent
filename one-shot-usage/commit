@@ -1,0 +1,33 @@
+#!/usr/bin/env zsh
+
+BASEDIR=$(dirname "$0")
+SCRIPT_DIR="$(realpath "${BASEDIR}")"
+
+$SCRIPT_DIR/ma -r "You are in a git repository. Your task is to commit all changes in the current git repo AND its submodules (downward only, never upward).
+
+## Commit message format — Conventional Commits
+
+Every commit message MUST follow this format:
+
+    type(scope): subject
+
+    body
+
+- **type** must be one of: build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test
+- **scope** is optional (parenthesized). Use a short noun describing the area changed.
+- **subject** must be lowercase, no trailing period, describe the change concisely.
+- The entire header line (type + scope + \": \" + subject) must be ≤ 72 characters.
+- Body is optional. If used, separate from subject with a blank line. Each body line ≤ 100 characters.
+- Breaking changes: add \`!\` after the type/scope, e.g. \`feat!: drop support for X\`
+- If a scope is not clearly applicable, omit it: just \`type: subject\`.
+
+## Steps
+
+1. Run \`git rev-parse --show-toplevel\` to get the current git root. This is the topmost repo you are allowed to touch — NEVER go above this directory.
+2. Run \`git submodule foreach --recursive 'echo \"$sm_path\"'\` to list all nested submodules under this repo. If there are none, skip to step 4.
+3. For each submodule from deepest to shallowest (reverse the list), run:
+   \`git -C <submodule_path> status --porcelain\`
+   If there are changes: run \`git -C <submodule_path> diff\` (ignoring .DS_Store, .claude/, and .gitignore'd files), generate a commit message following the Conventional Commits format above, then run \`git -C <submodule_path> add -A\` and \`git -C <submodule_path> commit -m \"<message>\"\`. If there are no changes, skip it.
+4. Finally, return to the git root. Run \`git status --porcelain\` and \`git diff\`. If there are changes (including submodule pointer updates from step 3), generate a commit message following the Conventional Commits format above, then run \`git add -A\` and \`git commit -m \"<message>\"\`.
+
+CRITICAL: NEVER go upward. If the current git root is itself a submodule of a larger repo, do NOT touch the parent. Only commit submodules UNDER the current repo, then the current repo itself."

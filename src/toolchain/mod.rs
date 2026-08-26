@@ -52,7 +52,7 @@ pub async fn run_tool(name: &str, args: &Value, ctx: &ToolCtx<'_>) -> ToolOutput
     if ctx.cfg.deny_tools.iter().any(|d| d == name) {
         return ToolOutput {
             content: format!(
-                "tool `{name}` is denied by configuration (MA_DENY_TOOLS); use another approach"
+                "tool `{name}` is denied by configuration (deny_tools); use another approach"
             ),
             is_error: true,
         };

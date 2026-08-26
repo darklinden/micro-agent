@@ -1,4 +1,4 @@
-//! Anthropic Messages upstream client (`MA_UPSTREAM_TYPE=anthropic-messages`).
+//! Anthropic Messages upstream client (`upstream_type = "anthropic-messages"`).
 
 use super::{Result, Upstream};
 use crate::config::Config;
@@ -14,7 +14,7 @@ pub struct AnthropicClient {
     api_key: String,
     model: String,
     max_tokens: usize,
-    /// Resolved `budget_tokens` for the `MA_THINKING_EFFORT` thinking block,
+    /// Resolved `budget_tokens` for the `[reasoning]` thinking block,
     /// already clamped below `max_tokens`; `0` when thinking is disabled.
     thinking_budget: usize,
     client: reqwest::Client,
@@ -31,15 +31,41 @@ impl AnthropicClient {
         } else {
             format!("{base}/v1/messages")
         };
-        // Anthropic requires `budget_tokens` in [1024, max_tokens): clamp to keep
-        // the request valid even at the default `MA_MAX_TOKENS=4096`, and disable
-        // thinking entirely when `max_tokens` is too small to hold a budget.
-        let thinking_budget = cfg
-            .thinking_effort
-            .anthropic_budget()
-            .filter(|_| cfg.max_tokens > 1024)
-            .map(|b| b.min(cfg.max_tokens - 1024).max(1024))
-            .unwrap_or(0);
+        // Resolve the `[reasoning]` policy into an Anthropic `thinking`
+        // budget. Anthropic requires `budget_tokens` in [1024, max_tokens):
+        // clamp to keep the request valid even at the default
+        // `max_tokens = 4096`, and disable thinking entirely when `max_tokens`
+        // is too small to hold a budget. Known tiers map to budgets; custom
+        // values passed through for other providers have no Anthropic meaning —
+        // warn once and fall back to the `high` tier.
+        let thinking_budget = match cfg.reasoning.audience_effort() {
+            None => 0,
+            Some(effort) => {
+                let base = match effort {
+                    "low" => 1024,
+                    "high" => 4096,
+                    "max" => 16_384,
+                    other => {
+                        crate::sesslog::emit(
+                            crate::sesslog::Level::Warn,
+                            "reasoning",
+                            json!({
+                                "message": format!(
+                                    "[reasoning] effort {other:?} has no anthropic-messages \
+                                     budget mapping; falling back to \"high\""
+                                ),
+                            }),
+                        );
+                        4096
+                    }
+                };
+                if cfg.max_tokens > 1024 {
+                    base.min(cfg.max_tokens - 1024).max(1024)
+                } else {
+                    0
+                }
+            }
+        };
         AnthropicClient {
             url,
             api_key: cfg.api_key.clone(),
@@ -377,12 +403,31 @@ mod tests {
         // max_tokens=4096, Max effort → budget clamps to max_tokens-1024.
         let big = crate::config::Config {
             max_tokens: 4096,
-            thinking_effort: crate::config::ThinkingEffort::Max,
+            reasoning: crate::config::ReasoningPolicy {
+                thinking_enabled: true,
+                effort: crate::config::ReasoningEffortOverride::Set("max".into()),
+            },
             ..cfg("http://x")
         };
         let c = AnthropicClient::new(&big, reqwest::Client::new());
         assert!(c.thinking_budget > 0, "thinking should be enabled for Max effort");
         assert!(c.thinking_budget < c.max_tokens);
+    }
+
+    #[test]
+    fn custom_effort_falls_back_to_high_budget() {
+        // A custom `[reasoning] effort` has no Anthropic mapping → the `high`
+        // tier (4096), still clamped under max_tokens.
+        let custom = crate::config::Config {
+            max_tokens: 8192,
+            reasoning: crate::config::ReasoningPolicy {
+                thinking_enabled: true,
+                effort: crate::config::ReasoningEffortOverride::Set("xhigh".into()),
+            },
+            ..cfg("http://x")
+        };
+        let c = AnthropicClient::new(&custom, reqwest::Client::new());
+        assert_eq!(c.thinking_budget, 4096);
     }
 
     #[test]
@@ -404,7 +449,10 @@ mod tests {
         // emit a budget ≥ max_tokens, which Anthropic would reject).
         let small = crate::config::Config {
             max_tokens: 100,
-            thinking_effort: crate::config::ThinkingEffort::Max,
+            reasoning: crate::config::ReasoningPolicy {
+                thinking_enabled: true,
+                effort: crate::config::ReasoningEffortOverride::Set("max".into()),
+            },
             ..cfg("http://x")
         };
         let c = AnthropicClient::new(&small, reqwest::Client::new());
@@ -436,7 +484,10 @@ mod tests {
             api_key: "k".into(),
             model: "m".into(),
             max_tokens: 100,
-            thinking_effort: crate::config::ThinkingEffort::None,
+            reasoning: crate::config::ReasoningPolicy {
+                thinking_enabled: false,
+                effort: crate::config::ReasoningEffortOverride::Drop,
+            },
             extra_headers: vec![],
             max_turns: 5,
             task_max_turns: None,

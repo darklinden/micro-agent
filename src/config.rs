@@ -763,10 +763,10 @@ url = "https://mcp.example.com/sse"
         .expect("uncommented template should build");
 
         assert_eq!(cfg.model, "deepseek-v4-flash");
-        assert_eq!(cfg.max_tokens, 4096);
-        assert_eq!(cfg.max_turns, 20);
+        assert_eq!(cfg.max_tokens, 128000);
+        assert_eq!(cfg.max_turns, 256);
         // Would be None/absent if these keys were swallowed by a table above.
-        assert_eq!(cfg.log_dir, Some("ma-logs".into()));
+        assert_eq!(cfg.log_dir, Some(".ma-logs".into()));
         assert_eq!(cfg.system_prefix, Some(String::new()));
         assert_eq!(cfg.mcp_list_tools_timeout_ms, 10_000);
         // The tables themselves still landed where they belong.

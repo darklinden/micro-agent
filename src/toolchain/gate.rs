@@ -11,11 +11,18 @@ use crate::upstream::Upstream;
 pub struct Gate<'a> {
     upstream: &'a dyn Upstream,
     objective: &'a str,
+    /// Suppress stdout notices (sub-agent runs are quiet; verdicts still go
+    /// to the session log either way).
+    quiet: bool,
 }
 
 impl<'a> Gate<'a> {
-    pub fn new(upstream: &'a dyn Upstream, objective: &'a str) -> Self {
-        Gate { upstream, objective }
+    pub fn new(upstream: &'a dyn Upstream, objective: &'a str, quiet: bool) -> Self {
+        Gate {
+            upstream,
+            objective,
+            quiet,
+        }
     }
 
     /// Ask whether `command` should run. Returns `Ok(true)` to allow.
@@ -49,12 +56,26 @@ Respond with JSON only, no prose, in this exact shape:
         // Gate output is discarded — we only need the final verdict text.
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         drop(rx);
-        let outcome = self
-            .upstream
-            .chat("", &[msg], &[], tx)
-            .await
-            .map_err(|e| anyhow::anyhow!("gate LLM call failed: {e}"))?;
+        let outcome = match self.upstream.chat("", &[msg], &[], tx).await {
+            Ok(o) => o,
+            Err(e) => {
+                // A failing judge call denies silently downstream; record the
+                // upstream error so the refusal is explainable from the log.
+                crate::sesslog::emit(
+                    crate::sesslog::Level::Warn,
+                    "gate_error",
+                    serde_json::json!({"command": command, "error": format!("{e:#}")}),
+                );
+                if !self.quiet {
+                    crate::out::gate_denied(&format!("judge call failed (denying fail-safe): {e}"));
+                }
+                return Err(anyhow::anyhow!("gate LLM call failed: {e}"));
+            }
+        };
 
+        // The judge's raw answer rides along on the `gate` event (bounded) so a
+        // refusal whose verdict text never parsed can be inspected afterwards.
+        let raw = crate::upstream::truncate(&outcome.assistant_text, 2000);
         let verdict = parse_verdict(&outcome.assistant_text);
         match verdict {
             Some((allow, reason)) => {
@@ -64,20 +85,33 @@ Respond with JSON only, no prose, in this exact shape:
                 crate::sesslog::emit(
                     level,
                     "gate",
-                    serde_json::json!({"command": command, "allow": allow, "reason": reason}),
+                    serde_json::json!({
+                        "command": command,
+                        "allow": allow,
+                        "reason": reason,
+                        "response": raw,
+                    }),
                 );
+                if !allow && !self.quiet {
+                    crate::out::gate_denied(&reason);
+                }
                 Ok(allow)
             }
             None => {
+                let reason = "unparseable gate answer; denying (fail-safe)";
                 crate::sesslog::emit(
                     crate::sesslog::Level::Warn,
                     "gate",
                     serde_json::json!({
                         "command": command,
                         "allow": false,
-                        "reason": "unparseable gate answer; denying (fail-safe)",
+                        "reason": reason,
+                        "response": raw,
                     }),
                 );
+                if !self.quiet {
+                    crate::out::gate_denied(reason);
+                }
                 Ok(false)
             }
         }

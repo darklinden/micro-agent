@@ -81,7 +81,7 @@ impl<'a> Agent<'a> {
             cfg: self.cfg,
             mcp: self.mcp,
             upstream: self.upstream,
-            gate: Gate::new(self.upstream, &self.objective),
+            gate: Gate::new(self.upstream, &self.objective, self.depth > 0),
             depth: self.depth,
             plan_path,
         };

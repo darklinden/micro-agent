@@ -128,3 +128,11 @@ impl TurnPrinter {
 pub fn banner(s: &str) {
     raw(&format!("{s}\n"));
 }
+
+/// Print a one-line safety-gate refusal notice (with the judge's reason).
+/// Distinct visual marker so a silent-looking denial is unmistakable next to
+/// the tool-run markers. Reason is collapsed to one line.
+pub fn gate_denied(reason: &str) {
+    let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");
+    raw(&format!("\n⛔ [gate] bash command refused: {reason}\n"));
+}

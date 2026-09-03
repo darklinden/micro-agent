@@ -236,7 +236,7 @@ mod tests {
             cfg,
             mcp,
             upstream,
-            gate: Gate::new(upstream, "objective", true),
+            gate: Gate::new(upstream, "objective", depth),
             depth,
             plan_path: Arc::new(std::sync::Mutex::new(None)),
         }

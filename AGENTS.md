@@ -81,7 +81,7 @@ The design centers on a **neutral core that every upstream client adapts to a wi
 
 Because tools run with zero confirmation, safety is layered:
 - `deny_tools` — config-listed tool names that are refused outright before any execution path.
-- The **bash safety gate** — only `bash` passes through it. Before execution, a *separate* LLM call (same upstream config) judges whether the command serves the task and isn't destructive, expecting `{"allow": bool, "reason": string}`. **Any failure defaults to deny** (fail-safe); `gate = false` disables it. A denied command is fed back to the model as a tool result so it can change approach.
+- The **bash safety gate** — only `bash` passes through it. Provably read-only commands (a whitelisted command, or a `;`/`&&` chain where every segment is one) short-circuit before any LLM call. Anything else is judged by a *separate* LLM call (same upstream config): whether the command serves the task and isn't destructive, expecting `{"allow": bool, "reason": string}`. **Any judge failure defaults to deny** (fail-safe); `gate = false` disables it. A denial is fed back to the model as a tool result (refused command + judge's reason + guard-rail note) so it can change approach.
 
 When changing the gate or dispatch order, keep that fail-safe property and the deny-before-gate ordering.
 

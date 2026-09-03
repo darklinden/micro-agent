@@ -10,7 +10,7 @@ use crate::mcp::McpPool;
 use crate::out;
 use crate::sesslog::{self, Level};
 use crate::toolchain::compress;
-use crate::toolchain::gate::Gate;
+use crate::toolchain::gate::{DENIAL_MARKER, Gate};
 use crate::toolchain::{build_tools, run_tool, ToolCtx};
 use crate::types::{ContentBlock, Message, Role, StreamEvent, ToolDef};
 use crate::upstream::Upstream;
@@ -81,7 +81,7 @@ impl<'a> Agent<'a> {
             cfg: self.cfg,
             mcp: self.mcp,
             upstream: self.upstream,
-            gate: Gate::new(self.upstream, &self.objective, self.depth > 0),
+            gate: Gate::new(self.upstream, &self.objective, self.depth),
             depth: self.depth,
             plan_path,
         };
@@ -210,13 +210,20 @@ impl<'a> Agent<'a> {
                         "is_error": r.is_error,
                     }),
                 );
-                let content = compress::prepare_tool_result(
-                    self.upstream,
-                    &self.objective,
-                    self.cfg.max_tool_result_bytes,
-                    &r.content,
-                )
-                .await;
+                // A gate refusal already carries its verdict text in-band; skip
+                // the compression LLM round trip so the denial reaches the agent
+                // verbatim (channel failures must not mutate into another one).
+                let content = if r.is_error && r.content.starts_with(DENIAL_MARKER) {
+                    r.content
+                } else {
+                    compress::prepare_tool_result(
+                        self.upstream,
+                        &self.objective,
+                        self.cfg.max_tool_result_bytes,
+                        &r.content,
+                    )
+                    .await
+                };
                 result_blocks.push(ContentBlock::ToolResult {
                     tool_use_id: c.id.clone(),
                     content,

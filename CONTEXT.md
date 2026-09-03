@@ -34,7 +34,7 @@
 
 ## 安全闸门（Gate）
 
-只有 `bash` 类命令在真正执行前，会另起一次 LLM 请求，让模型结合「当前任务语境 + 命令」判定是否执行、危害多大；任何失败默认**拒绝**。`gate = false` 关闭。_Avoid_: approval, permission, trust dialog（此 agent 无人工确认/信任流程）。
+只有 `bash` 类命令在真正执行前会过闸。可证明只读的命令（白名单命令，或拆段后**每一段**都是白名单只读的 `;`/`&&` 链）在 judge 之前短路、直接放行，无 LLM 往返；其余命令另起一次 LLM 请求，让模型结合「当前任务语境 + 命令」判定是否执行、危害多大；judge 任何失败默认**拒绝**（fail-safe），拒绝按 `kind`（Judge/Unparseable/UpstreamError）记入会话日志。`gate = false` 关闭。_Avoid_: approval, permission, trust dialog（此 agent 无人工确认/信任流程）。
 
 ## MCP
 

@@ -64,17 +64,26 @@ pub async fn run_tool(name: &str, args: &Value, ctx: &ToolCtx<'_>) -> ToolOutput
             .get("command")
             .and_then(|c| c.as_str())
             .unwrap_or_default();
-        let allowed = ctx.gate.check(cmd).await.unwrap_or(false);
-        if !allowed {
+        let verdict = ctx.gate.check(cmd).await;
+        if !verdict.is_allowed() {
+            // A denied verdict always carries its kind (`GateVerdict::denied`
+            // sets it); the allow path never reaches this branch.
+            let kind = format!("{:?}", verdict.kind.expect("denied verdict has a kind"));
+            // bash_refused carries reason + kind + depth so the denial class
+            // (Judge vs Unparseable vs UpstreamError) is distinguishable in
+            // the session log without guessing.
             crate::sesslog::emit(
                 crate::sesslog::Level::Info,
                 "bash_refused",
-                serde_json::json!({"depth": ctx.depth, "command": cmd}),
+                serde_json::json!({
+                    "depth": ctx.depth,
+                    "command": cmd,
+                    "reason": verdict.reason,
+                    "kind": kind,
+                }),
             );
             return ToolOutput {
-                content: "The bash command was refused by the safety gate. Adjust the command or \
-                          find a safer tool-based alternative (e.g. read_file/write_file/edit_file)."
-                    .into(),
+                content: gate::build_denied_content(cmd, &verdict),
                 is_error: true,
             };
         }
@@ -93,5 +102,190 @@ pub async fn run_tool(name: &str, args: &Value, ctx: &ToolCtx<'_>) -> ToolOutput
     ToolOutput {
         content: format!("unknown tool `{name}`"),
         is_error: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{run_tool, ToolCtx};
+    use crate::config::{
+        Config, ReasoningEffortOverride, ReasoningPolicy, UpstreamType,
+    };
+    use crate::mcp::McpPool;
+    use crate::types::{Message, StreamOutcome, ToolDef};
+    use crate::upstream::Upstream;
+    use serde_json::{json, Value};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// A canned upstream that records how many times `chat` was called.
+    /// Same shape as the fakes in compress.rs and subagent.rs tests.
+    struct FakeUpstream {
+        calls: AtomicUsize,
+        reply: Arc<dyn Fn() -> anyhow::Result<StreamOutcome> + Send + Sync>,
+    }
+
+    impl FakeUpstream {
+        fn canned(text: &'static str) -> Self {
+            let reply = Arc::new(move || {
+                Ok(StreamOutcome {
+                    assistant_text: text.to_string(),
+                    ..StreamOutcome::default()
+                })
+            });
+            FakeUpstream {
+                calls: AtomicUsize::new(0),
+                reply,
+            }
+        }
+        fn failing() -> Self {
+            let reply = Arc::new(|| Err(anyhow::anyhow!("network down")));
+            FakeUpstream {
+                calls: AtomicUsize::new(0),
+                reply,
+            }
+        }
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Upstream for FakeUpstream {
+        fn wire_tools(&self, _tools: &[ToolDef]) -> Vec<Value> {
+            vec![]
+        }
+        async fn chat(
+            &self,
+            _system: &str,
+            _messages: &[Message],
+            _tools: &[ToolDef],
+            _emitter: tokio::sync::mpsc::UnboundedSender<crate::types::StreamEvent>,
+        ) -> anyhow::Result<StreamOutcome> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            (self.reply)()
+        }
+    }
+
+    fn cfg(gate_enabled: bool) -> Config {
+        Config {
+            upstream_type: UpstreamType::OaiChat,
+            url: "http://x".into(),
+            api_key: "k".into(),
+            model: "m".into(),
+            max_tokens: 100,
+            reasoning: ReasoningPolicy {
+                thinking_enabled: false,
+                effort: ReasoningEffortOverride::Drop,
+            },
+            extra_headers: vec![],
+            max_turns: 5,
+            task_max_turns: None,
+            deny_tools: vec![],
+            gate_enabled,
+            max_tool_result_bytes: 1_000_000,
+            mcp_servers: vec![],
+            mcp_list_tools_timeout_ms: 1000,
+            system_prefix: None,
+            system_suffix: None,
+            persona: None,
+            system_prompt: None,
+            log_dir: None,
+            log_level: "info".into(),
+        }
+    }
+
+    fn ctx<'a>(
+        upstream: &'a dyn Upstream,
+        cfg: &'a Config,
+        pool: &'a McpPool,
+        gate: super::gate::Gate<'a>,
+    ) -> ToolCtx<'a> {
+        ToolCtx {
+            cfg,
+            mcp: pool,
+            upstream,
+            gate,
+            depth: 0,
+            plan_path: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_tool_denies_with_three_part_content() {
+        let fake = FakeUpstream::canned(r#"{"allow": false, "reason": "rm -rf"}"#);
+        let cfg = cfg(true);
+        let pool = McpPool::empty();
+        let gate = super::gate::Gate::new(&fake, "objective", 0);
+        let out = run_tool(
+            "bash",
+            &json!({"command": "rm -rf x"}),
+            &ctx(&fake, &cfg, &pool, gate),
+        )
+        .await;
+        assert!(out.is_error);
+        assert!(out.content.contains("The safety judge refused this bash command."));
+        assert!(out.content.contains("rm -rf"));
+        assert!(
+            out.content.contains("split add/commit"),
+            "refusal should carry the guard-rail sentence: {}",
+            out.content
+        );
+    }
+
+    #[tokio::test]
+    async fn run_tool_read_only_allow_passes_through() {
+        // `cd /tmp && ls -la` is pre-allowed read-only, so the judge is never
+        // reached — assert the allowance passes through as a normal result.
+        let fake = FakeUpstream::canned("should not be called");
+        let cfg = cfg(true);
+        let pool = McpPool::empty();
+        let gate = super::gate::Gate::new(&fake, "objective", 0);
+        let out = run_tool(
+            "bash",
+            &json!({"command": "cd /tmp && ls -la"}),
+            &ctx(&fake, &cfg, &pool, gate),
+        )
+        .await;
+        assert!(!out.is_error);
+        assert_eq!(fake.calls(), 0, "read-only command must not call the judge");
+        assert!(!out.content.contains("safety judge refused"));
+    }
+
+    #[tokio::test]
+    async fn run_tool_channel_failure_is_fail_safe_denial() {
+        let fake = FakeUpstream::failing();
+        let cfg = cfg(true);
+        let pool = McpPool::empty();
+        let gate = super::gate::Gate::new(&fake, "objective", 0);
+        let out = run_tool(
+            "bash",
+            &json!({"command": "curl -sI https://example.com"}),
+            &ctx(&fake, &cfg, &pool, gate),
+        )
+        .await;
+        assert!(out.is_error);
+        assert!(
+            out.content.contains("NOT that the command is unsafe"),
+            "channel failure must not imply the command is guilty: {}",
+            out.content
+        );
+        assert!(out.content.contains("retry the command as-is once"));
+    }
+
+    #[tokio::test]
+    async fn run_tool_gate_disabled_skips_check() {
+        let fake = FakeUpstream::canned("should not be called");
+        let cfg = cfg(false);
+        let pool = McpPool::empty();
+        let gate = super::gate::Gate::new(&fake, "objective", 0);
+        let out = run_tool(
+            "bash",
+            &json!({"command": "echo hi"}),
+            &ctx(&fake, &cfg, &pool, gate),
+        )
+        .await;
+        assert!(!out.is_error);
+        assert_eq!(fake.calls(), 0);
     }
 }

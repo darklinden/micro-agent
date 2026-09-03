@@ -207,12 +207,16 @@ multi-turn tool loops stay lossless (matching `ai-bridge`'s reasoning bridge).
 
 ### Safety gate
 
-Only `bash` passes through the gate: before a command runs, `ma` makes a
-separate LLM query asking whether the command serves the task and is not
-destructive. **Any failure (network error, unparseable answer, refusal)
-defaults to denying the command** (fail-safe). A denied command is returned to
-the model as a tool result so it can change approach. `gate = false` disables
-the gate; `deny_tools` still applies.
+Only `bash` passes through the gate. Commands that are provably read-only — a
+whitelisted command (git read-only subcommands, ls/grep/cat/head/tail/less/
+pwd/cd/find/du/file/echo/which/type) or a `;`/`&&` chain where **every**
+segment is one — run immediately with no LLM round trip. Anything else is
+judged by a separate LLM query: whether the command serves the task and is
+not destructive. **Any failure of the judge (network error, unparseable
+answer, refusal) denies the command** (fail-safe). A denial is returned to
+the model as a tool result — the refused command, the judge's reason, and a
+guard-rail note (a channel failure may be retried once) — so it can change
+approach. `gate = false` disables the gate; `deny_tools` still applies.
 
 ### System prompt
 
@@ -257,6 +261,10 @@ are no full-request dumps, so the file stays small and jq-friendly:
 jq -r 'select(.ev=="message") | .msg.role' ma-logs/<ts>.log   # the conversation
 jq -c 'select(.ev=="gate")'                ma-logs/<ts>.log   # safety verdicts
 ```
+
+`gate` events carry `depth` (which agent level the command came from) and,
+when a command is refused, `kind` — `Judge`, `Unparseable`, or
+`UpstreamError` — so refusal classes are auditable without guessing.
 
 **stdout** shows only the model's streamed text + compact tool marks (`⧗ …`),
 plus a `[log] <path>` banner at startup so the session log is easy to find.

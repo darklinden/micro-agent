@@ -31,11 +31,13 @@ fn raw(s: &str) {
 }
 
 /// Serialize tool arguments to a compact JSON string, truncated with `…` if it
-/// exceeds 200 characters.
+/// exceeds 200 bytes. The cut is floored to a char boundary, so multi-byte
+/// arguments (e.g. CJK) never panic on a slice landing mid-character.
 fn compact_args(args: &serde_json::Value) -> String {
     let text = args.to_string();
     if text.len() > 200 {
-        let mut s = text[..200].to_string();
+        let bound = text.floor_char_boundary(200);
+        let mut s = text[..bound].to_string();
         s.push('…');
         s
     } else {
@@ -135,4 +137,26 @@ pub fn banner(s: &str) {
 pub fn gate_denied(reason: &str) {
     let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");
     raw(&format!("\n⛔ [gate] bash command refused: {reason}\n"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compact_args;
+
+    #[test]
+    fn compact_args_short_is_verbatim() {
+        let args = serde_json::json!({ "command": "ls" });
+        assert_eq!(compact_args(&args), args.to_string());
+    }
+
+    #[test]
+    fn compact_args_multibyte_does_not_panic() {
+        // `{"k":"` is 6 bytes, then 3-byte CJK chars: byte 200 lands two bytes
+        // into a char, which used to panic when slicing by bytes.
+        let args = serde_json::json!({ "k": "的".repeat(70) });
+        let out = compact_args(&args);
+        assert!(out.ends_with('…'), "expected truncation marker: {out}");
+        // Truncation must not exceed the original byte budget.
+        assert!(out.len() <= 200 + '…'.len_utf8());
+    }
 }
